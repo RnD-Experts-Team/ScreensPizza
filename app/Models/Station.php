@@ -10,4 +10,9 @@ class Station extends Model
         'name',
         'room_name',
     ];
+
+    public function store()
+    {
+        return $this->belongsTo(Store::class);
+    }
 }
