@@ -62,9 +62,14 @@ class LivekitTokenController extends Controller
                 ->setRoomJoin(true)
                 ->setRoomName($room)
                 ->setRoomAdmin(true)
-                ->setCanPublish(false)
+                ->setRoomList(true)
+                ->setRoomRecord(true)
+                ->setIngressAdmin(true)
+                ->setCanPublish(true)
                 ->setCanSubscribe(true)
-                ->setCanPublishData(false);
+                ->setCanPublishData(true)
+                ->setCanUpdateOwnMetadata(true)
+                ->setCanSubscribeMetrics(true);
 
             $token = (new AccessToken(
                 config('livekit.api_key'),
@@ -88,9 +93,14 @@ class LivekitTokenController extends Controller
             'permissions' => [
                 'room_admin' => true,
                 'room_join' => true,
+                'room_list' => true,
+                'room_record' => true,
+                'ingress_admin' => true,
                 'can_subscribe' => true,
-                'can_publish' => false,
-                'can_publish_data' => false,
+                'can_publish' => true,
+                'can_publish_data' => true,
+                'can_update_own_metadata' => true,
+                'can_subscribe_metrics' => true,
             ],
         ]);
     }
