@@ -20,15 +20,20 @@ class LivekitTokenController extends Controller
         $room = $station->room_name;
         $identity = 'station:' . $station->id;
 
-        // Build token with video grant
+        // Station: join + speak + listen only.
+        $grant = (new VideoGrant())
+            ->setRoomJoin()
+            ->setRoomName($room)
+            ->setCanPublish(true)
+            ->setCanSubscribe(true)
+            ->setCanPublishData(false);
+
         $token = (new AccessToken(
             config('livekit.api_key'),
             config('livekit.api_secret')
         ))
             ->init((new AccessTokenOptions())->setIdentity($identity))
-            ->setGrant(
-                (new VideoGrant())->setRoomJoin()->setRoomName($room)
-            )
+            ->setGrant($grant)
             ->toJwt();
 
         return response()->json([
@@ -45,31 +50,48 @@ class LivekitTokenController extends Controller
             'store_id' => 'required|exists:stores,id',
         ]);
 
-        // Fetch rooms for that store
-        $stations = Station::where('store_id', $data['store_id'])->get();
-        $tokens = [];
+        $rooms = Station::where('store_id', $data['store_id'])
+            ->pluck('room_name')
+            ->values();
 
-        foreach ($stations as $station) {
-            $identity = 'supervisor:' . $data['store_id'];
-            $room = $station->room_name;
+        $identity = 'supervisor:' . $data['store_id'];
 
-            $tokens[] = [
+        // Room admin is room-scoped in LiveKit, so mint one admin token per room.
+        $tokens = $rooms->map(function ($room) use ($identity) {
+            $grant = (new VideoGrant())
+                ->setRoomJoin(true)
+                ->setRoomName($room)
+                ->setRoomAdmin(true)
+                ->setCanPublish(false)
+                ->setCanSubscribe(true)
+                ->setCanPublishData(false);
+
+            $token = (new AccessToken(
+                config('livekit.api_key'),
+                config('livekit.api_secret')
+            ))
+                ->init((new AccessTokenOptions())->setIdentity($identity))
+                ->setGrant($grant)
+                ->toJwt();
+
+            return [
                 'room' => $room,
-                'token' => (new AccessToken(
-                    config('livekit.api_key'),
-                    config('livekit.api_secret')
-                ))
-                    ->init((new AccessTokenOptions())->setIdentity($identity))
-                    ->setGrant(
-                        (new VideoGrant())->setRoomJoin()->setRoomName($room)
-                    )
-                    ->toJwt()
+                'token' => $token,
             ];
-        }
+        })->values();
 
         return response()->json([
             'server_url' => config('livekit.host'),
+            'identity' => $identity,
+            'rooms' => $rooms,
             'tokens' => $tokens,
+            'permissions' => [
+                'room_admin' => true,
+                'room_join' => true,
+                'can_subscribe' => true,
+                'can_publish' => false,
+                'can_publish_data' => false,
+            ],
         ]);
     }
 }
