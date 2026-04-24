@@ -16,7 +16,10 @@ class LivekitParticipantController extends Controller
 
     public function list($room)
     {
-        return $this->client()->listParticipants($room);
+        $participants = $this->client()->listParticipants($room);
+
+        return response($participants->serializeToJsonString(), 200)
+            ->header('Content-Type', 'application/json');
     }
 
     public function remove($room, $identity)
