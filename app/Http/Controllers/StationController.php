@@ -14,7 +14,7 @@ class StationController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'store_id' => 'required|string',
+            'store_id' => 'required|exists:stores,id',
             'name' => 'required|string',
             'room_name' => 'required|string|unique:stations,room_name',
         ]);

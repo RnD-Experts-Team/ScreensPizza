@@ -42,7 +42,7 @@ class LivekitTokenController extends Controller
     public function supervisor(Request $request)
     {
         $data = $request->validate([
-            'store_id' => 'required|string',
+            'store_id' => 'required|exists:stores,id',
         ]);
 
         // Fetch rooms for that store
