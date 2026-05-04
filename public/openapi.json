@@ -11,13 +11,7 @@
             "description": "Laravel API base path"
         }
     ],
-    "tags": [
-        { "name": "Stations" },
-        { "name": "Station Participants (Legacy)" },
-        { "name": "Tokens" },
-        { "name": "LiveKit Rooms" },
-        { "name": "LiveKit Participants" }
-    ],
+    "tags": [{ "name": "Stations" }, { "name": "Tokens" }],
     "paths": {
         "/{storeId}/stations": {
             "get": {
