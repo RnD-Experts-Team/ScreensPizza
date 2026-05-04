@@ -19,16 +19,15 @@
         { "name": "LiveKit Participants" }
     ],
     "paths": {
-        "/stations": {
+        "/{storeId}/stations": {
             "get": {
                 "tags": ["Stations"],
                 "summary": "List stations",
-                "description": "Returns all stations, or only stations for the provided `storeId`.",
                 "parameters": [
                     {
                         "name": "storeId",
-                        "in": "query",
-                        "required": false,
+                        "in": "path",
+                        "required": true,
                         "description": "External store number (`stores.store_number`).",
                         "schema": { "type": "string" },
                         "example": "S-1001"
@@ -54,24 +53,29 @@
             "post": {
                 "tags": ["Stations"],
                 "summary": "Create station",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "description": "External store number (`stores.store_number`).",
+                        "schema": { "type": "string" },
+                        "example": "S-1001"
+                    }
+                ],
                 "requestBody": {
                     "required": true,
                     "content": {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["storeId", "name", "room_name"],
+                                "required": ["name", "room_name"],
                                 "properties": {
-                                    "storeId": {
-                                        "type": "string",
-                                        "description": "Store number"
-                                    },
                                     "name": { "type": "string" },
                                     "room_name": { "type": "string" }
                                 }
                             },
                             "example": {
-                                "storeId": "S-1001",
                                 "name": "Counter 1",
                                 "room_name": "store-1001-counter-1"
                             }
@@ -94,24 +98,24 @@
                 }
             }
         },
-        "/stations/{station}": {
+        "/{storeId}/stations/{station}": {
             "delete": {
                 "tags": ["Stations"],
                 "summary": "Delete station",
                 "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" },
+                        "description": "Store number used to scope deletion"
+                    },
                     {
                         "name": "station",
                         "in": "path",
                         "required": true,
                         "schema": { "type": "integer" },
                         "description": "Station ID"
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" },
-                        "description": "Store number used to scope deletion"
                     }
                 ],
                 "responses": {
@@ -121,205 +125,24 @@
                 }
             }
         },
-        "/stations/{room}/participants": {
-            "get": {
-                "tags": ["Station Participants (Legacy)"],
-                "summary": "List participants (legacy endpoint)",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" },
-                        "description": "Store number that must own the room"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "LiveKit participants",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ListParticipantsResponse"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/stations/{room}/participants/{identity}": {
-            "delete": {
-                "tags": ["Station Participants (Legacy)"],
-                "summary": "Remove participant (legacy endpoint)",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "responses": {
-                    "204": { "description": "Participant removed" },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/tokens": {
-            "get": {
+        "/{storeId}/tokens/stations/{station}": {
+            "post": {
                 "tags": ["Tokens"],
-                "summary": "List issued tokens",
+                "summary": "Issue station token",
                 "parameters": [
-                    {
-                        "name": "identity",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "room",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "scope",
-                        "in": "query",
-                        "required": false,
-                        "schema": {
-                            "type": "string",
-                            "enum": ["station", "supervisor", "custom"]
-                        }
-                    },
-                    {
-                        "name": "revoked",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "boolean" }
-                    },
-                    {
-                        "name": "active_only",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "boolean" }
-                    },
-                    {
-                        "name": "per_page",
-                        "in": "query",
-                        "required": false,
-                        "schema": {
-                            "type": "integer",
-                            "minimum": 1,
-                            "default": 50
-                        }
-                    },
                     {
                         "name": "storeId",
-                        "in": "query",
-                        "required": false,
-                        "schema": { "type": "string" },
-                        "description": "Filter by resolved store (metadata-based)"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Paginated issued token registry",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "tokens": {
-                                            "$ref": "#/components/schemas/PaginatedIssuedTokens"
-                                        },
-                                        "note": { "type": "string" }
-                                    }
-                                }
-                            }
-                        }
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
                     },
-                    "404": { "$ref": "#/components/responses/NotFound" }
-                }
-            }
-        },
-        "/tokens/{id}": {
-            "delete": {
-                "tags": ["Tokens"],
-                "summary": "Revoke token in local registry",
-                "description": "Marks token as revoked in your app DB. Does not centrally invalidate already-issued LiveKit JWTs.",
-                "parameters": [
                     {
-                        "name": "id",
+                        "name": "station",
                         "in": "path",
                         "required": true,
                         "schema": { "type": "integer" }
                     }
                 ],
-                "responses": {
-                    "200": {
-                        "description": "Revocation recorded",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "id": { "type": "integer" },
-                                        "revoked_at": {
-                                            "type": "string",
-                                            "format": "date-time",
-                                            "nullable": true
-                                        },
-                                        "note": { "type": "string" }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" }
-                }
-            }
-        },
-        "/tokens/station": {
-            "post": {
-                "tags": ["Tokens"],
-                "summary": "Issue station token",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "station_id"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "station_id": { "type": "integer" }
-                                }
-                            }
-                        }
-                    }
-                },
                 "responses": {
                     "200": {
                         "description": "Station token created",
@@ -343,27 +166,19 @@
                 }
             }
         },
-        "/tokens/supervisor": {
+        "/{storeId}/tokens/supervisor": {
             "post": {
                 "tags": ["Tokens"],
                 "summary": "Issue supervisor tokens for all store rooms",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId"],
-                                "properties": {
-                                    "storeId": {
-                                        "type": "string",
-                                        "description": "Store number"
-                                    }
-                                }
-                            }
-                        }
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" },
+                        "description": "Store number"
                     }
-                },
+                ],
                 "responses": {
                     "200": {
                         "description": "Room-scoped supervisor tokens",
@@ -401,753 +216,6 @@
                                             }
                                         }
                                     }
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/tokens/custom": {
-            "post": {
-                "tags": ["Tokens"],
-                "summary": "Issue custom LiveKit token",
-                "description": "Allows custom grant composition. If both `storeId` and `video.room` are provided, room must belong to that store.",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["identity", "video"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "identity": { "type": "string" },
-                                    "ttl": { "type": "integer", "minimum": 1 },
-                                    "name": { "type": "string" },
-                                    "metadata": { "type": "string" },
-                                    "attributes": {
-                                        "type": "object",
-                                        "additionalProperties": {
-                                            "type": "string"
-                                        }
-                                    },
-                                    "video": {
-                                        "$ref": "#/components/schemas/VideoGrantInput"
-                                    }
-                                }
-                            },
-                            "examples": {
-                                "roomJoinOnly": {
-                                    "value": {
-                                        "storeId": "S-1001",
-                                        "identity": "viewer:1",
-                                        "video": {
-                                            "room": "store-1001-counter-1",
-                                            "room_join": true,
-                                            "can_subscribe": true,
-                                            "can_publish": false
-                                        }
-                                    }
-                                },
-                                "admin": {
-                                    "value": {
-                                        "storeId": "S-1001",
-                                        "identity": "admin:1001",
-                                        "ttl": 7200,
-                                        "video": {
-                                            "room": "store-1001-counter-1",
-                                            "room_join": true,
-                                            "room_admin": true,
-                                            "room_list": true,
-                                            "room_record": true,
-                                            "can_publish": true,
-                                            "can_subscribe": true,
-                                            "can_publish_data": true,
-                                            "can_update_own_metadata": true,
-                                            "can_subscribe_metrics": true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Custom token issued",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "server_url": { "type": "string" },
-                                        "storeId": {
-                                            "type": "string",
-                                            "nullable": true
-                                        },
-                                        "store_id": {
-                                            "type": "integer",
-                                            "nullable": true
-                                        },
-                                        "identity": { "type": "string" },
-                                        "token": { "type": "string" },
-                                        "video": {
-                                            "$ref": "#/components/schemas/VideoGrantInput"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/tokens/parse": {
-            "post": {
-                "tags": ["Tokens"],
-                "summary": "Parse and validate token claims",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["token"],
-                                "properties": {
-                                    "token": { "type": "string" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Decoded claims",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "claims": {
-                                            "type": "object",
-                                            "additionalProperties": true
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms": {
-            "get": {
-                "tags": ["LiveKit Rooms"],
-                "summary": "List active LiveKit rooms for a store",
-                "parameters": [
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "names",
-                        "in": "query",
-                        "required": false,
-                        "style": "form",
-                        "explode": true,
-                        "description": "Optional room-name filter. Can be repeated: ?names=r1&names=r2",
-                        "schema": {
-                            "type": "array",
-                            "items": { "type": "string" }
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "LiveKit listRooms response",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ListRoomsResponse"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            },
-            "post": {
-                "tags": ["LiveKit Rooms"],
-                "summary": "Create room",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "name"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "name": { "type": "string" },
-                                    "empty_timeout": {
-                                        "type": "integer",
-                                        "minimum": 0
-                                    },
-                                    "max_participants": {
-                                        "type": "integer",
-                                        "minimum": 0
-                                    },
-                                    "node_id": { "type": "string" },
-                                    "metadata": { "type": "string" },
-                                    "min_playout_delay": {
-                                        "type": "integer",
-                                        "minimum": 0
-                                    },
-                                    "max_playout_delay": {
-                                        "type": "integer",
-                                        "minimum": 0
-                                    },
-                                    "sync_streams": { "type": "boolean" },
-                                    "room_preset": { "type": "string" },
-                                    "departure_timeout": {
-                                        "type": "integer",
-                                        "minimum": 0
-                                    },
-                                    "replay_enabled": { "type": "boolean" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Room created",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/Room"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}": {
-            "delete": {
-                "tags": ["LiveKit Rooms"],
-                "summary": "Delete room",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Delete result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/metadata": {
-            "patch": {
-                "tags": ["LiveKit Rooms"],
-                "summary": "Update room metadata",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "metadata"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "metadata": { "type": "string" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Room updated",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/Room"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants": {
-            "get": {
-                "tags": ["LiveKit Participants"],
-                "summary": "List participants",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Participants list",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ListParticipantsResponse"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants/{identity}": {
-            "get": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Get participant",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Participant details",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ParticipantInfo"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            },
-            "delete": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Remove participant",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "storeId",
-                        "in": "query",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "Remove participant result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            },
-            "patch": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Update participant",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "metadata": { "type": "string" },
-                                    "name": { "type": "string" },
-                                    "attributes": {
-                                        "type": "object",
-                                        "additionalProperties": {
-                                            "type": "string"
-                                        }
-                                    },
-                                    "permission": {
-                                        "$ref": "#/components/schemas/ParticipantPermissionInput"
-                                    }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Updated participant",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "$ref": "#/components/schemas/ParticipantInfo"
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants/{identity}/forward": {
-            "post": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Forward participant to destination room",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "destination_room"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "destination_room": { "type": "string" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Forward result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants/{identity}/move": {
-            "post": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Move participant to destination room",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "destination_room"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "destination_room": { "type": "string" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Move result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants/{identity}/mute-track": {
-            "post": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Mute or unmute participant track",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "track_sid", "muted"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "track_sid": { "type": "string" },
-                                    "muted": { "type": "boolean" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Mute result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/participants/{identity}/subscriptions": {
-            "post": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Subscribe/unsubscribe participant tracks",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    },
-                    {
-                        "name": "identity",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": [
-                                    "storeId",
-                                    "track_sids",
-                                    "subscribe"
-                                ],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "track_sids": {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    },
-                                    "subscribe": { "type": "boolean" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "Subscription update result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
-                                }
-                            }
-                        }
-                    },
-                    "404": { "$ref": "#/components/responses/NotFound" },
-                    "422": { "$ref": "#/components/responses/ValidationError" }
-                }
-            }
-        },
-        "/livekit/rooms/{room}/send-data": {
-            "post": {
-                "tags": ["LiveKit Participants"],
-                "summary": "Send data packet to room participants",
-                "parameters": [
-                    {
-                        "name": "room",
-                        "in": "path",
-                        "required": true,
-                        "schema": { "type": "string" }
-                    }
-                ],
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "required": ["storeId", "data", "kind"],
-                                "properties": {
-                                    "storeId": { "type": "string" },
-                                    "data": {
-                                        "type": "string",
-                                        "description": "Payload string passed to LiveKit server API"
-                                    },
-                                    "kind": {
-                                        "type": "integer",
-                                        "description": "LiveKit DataPacket kind enum value"
-                                    },
-                                    "destination_identities": {
-                                        "type": "array",
-                                        "items": { "type": "string" }
-                                    },
-                                    "topic": { "type": "string" }
-                                }
-                            }
-                        }
-                    }
-                },
-                "responses": {
-                    "200": {
-                        "description": "SendData result",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "additionalProperties": true
                                 }
                             }
                         }

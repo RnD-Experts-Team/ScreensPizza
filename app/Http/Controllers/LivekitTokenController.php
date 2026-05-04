@@ -238,15 +238,9 @@ class LivekitTokenController extends Controller
     }
 
     // Station token to join own room
-    public function station(Request $request)
+    public function station(string $StoreId, Station $station)
     {
-        $data = $request->validate([
-            'storeId' => 'required|string',
-            'station_id' => 'required|integer|exists:stations,id',
-        ]);
-
-        $storeId = $this->resolveStoreId($data['storeId']);
-        $station = Station::findOrFail($data['station_id']);
+        $storeId = $this->resolveStoreId($StoreId);
         if ((int) $station->store_id !== $storeId) {
             abort(404, 'Station not found for provided storeId.');
         }
@@ -277,7 +271,7 @@ class LivekitTokenController extends Controller
 
         $this->storeIssuedToken('station', $identity, $room, $token, $ttl, [
             'store_id' => $storeId,
-            'store_number' => $data['storeId'],
+            'store_number' => $StoreId,
             'can_publish' => true,
             'can_subscribe' => true,
             'can_publish_data' => false,
@@ -285,7 +279,7 @@ class LivekitTokenController extends Controller
 
         return response()->json([
             'server_url' => config('livekit.host'),
-            'storeId' => $data['storeId'],
+            'storeId' => $StoreId,
             'store_id' => $storeId,
             'room' => $room,
             'token' => $token,
@@ -293,20 +287,16 @@ class LivekitTokenController extends Controller
     }
 
     // Supervisor token for all rooms in a store
-    public function supervisor(Request $request)
+    public function supervisor(string $StoreId)
     {
-        $data = $request->validate([
-            'storeId' => 'required|string',
-        ]);
-
-        $storeId = $this->resolveStoreId($data['storeId']);
+        $storeId = $this->resolveStoreId($StoreId);
 
         $rooms = Station::where('store_id', $storeId)
             ->pluck('room_name')
             ->values();
 
         $identity = 'supervisor:' . $storeId;
-        $storeNumber = $data['storeId'];
+        $storeNumber = $StoreId;
         $ttl = 4 * 60 * 60;
 
         // Room admin is room-scoped in LiveKit, so mint one admin token per room.
@@ -359,7 +349,7 @@ class LivekitTokenController extends Controller
 
         return response()->json([
             'server_url' => config('livekit.host'),
-            'storeId' => $data['storeId'],
+            'storeId' => $StoreId,
             'store_id' => $storeId,
             'identity' => $identity,
             'rooms' => $rooms,

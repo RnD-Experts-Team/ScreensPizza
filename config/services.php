@@ -34,5 +34,17 @@ return [
             'channel' => env('SLACK_BOT_USER_DEFAULT_CHANNEL'),
         ],
     ],
+    'auth_server' => [
+        'base_url' => env('AUTH_SERVER_BASE_URL', 'http://auth-service.local'),
+        'verify_path' => env('AUTH_SERVER_VERIFY_PATH', '/api/v1/auth/token/verify'),
+        'service_name' => env('AUTH_SERVER_SERVICE_NAME', 'my-service'),
+        'call_token' => env('AUTH_SERVER_CALL_TOKEN', ''),
 
+        'timeout' => (int) env('AUTH_SERVER_TIMEOUT', 3),
+        'retries' => (int) env('AUTH_SERVER_RETRIES', 1),
+        'retry_ms' => (int) env('AUTH_SERVER_RETRY_MS', 100),
+
+        // Redis caching on client side
+        'cache_ttl' => (int) env('AUTH_SERVER_CACHE_TTL', 30),
+    ],
 ];

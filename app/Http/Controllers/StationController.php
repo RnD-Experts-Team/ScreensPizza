@@ -13,40 +13,30 @@ class StationController extends Controller
         return (int) $store->id;
     }
 
-    public function index(Request $request)
+    public function index(string $StoreId)
     {
-        $query = Station::query();
+        $storeId = $this->resolveStoreId($StoreId);
 
-        if ($request->filled('storeId')) {
-            $storeId = $this->resolveStoreId((string) $request->input('storeId'));
-            $query->where('store_id', $storeId);
-        }
-
-        return $query->get();
+        return Station::where('store_id', $storeId)->get();
     }
 
-    public function store(Request $request)
+    public function store(Request $request, string $StoreId)
     {
         $data = $request->validate([
-            'storeId' => 'required|string',
             'name' => 'required|string',
             'room_name' => 'required|string|unique:stations,room_name',
         ]);
 
         return Station::create([
-            'store_id' => $this->resolveStoreId($data['storeId']),
+            'store_id' => $this->resolveStoreId($StoreId),
             'name' => $data['name'],
             'room_name' => $data['room_name'],
         ]);
     }
 
-    public function destroy(Request $request, Station $station)
+    public function destroy(string $StoreId, Station $station)
     {
-        $data = $request->validate([
-            'storeId' => 'required|string',
-        ]);
-
-        $storeId = $this->resolveStoreId($data['storeId']);
+        $storeId = $this->resolveStoreId($StoreId);
         if ((int) $station->store_id !== $storeId) {
             abort(404, 'Station not found for provided storeId.');
         }
