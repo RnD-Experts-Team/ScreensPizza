@@ -10,6 +10,7 @@ return new class extends Migration {
         Schema::create('stores', function (Blueprint $table) {
             $table->unsignedBigInteger('id')->primary();
             $table->string('store_number');
+            $table->string('station_password')->nullable();
             $table->timestamps();
         });
     }

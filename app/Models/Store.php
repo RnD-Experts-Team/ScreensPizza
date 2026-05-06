@@ -8,7 +8,16 @@ class Store extends Model
 {
     protected $fillable = [
         'id',
-        'store_number'
+        'store_number',
+        'station_password',
+    ];
+
+    protected $hidden = [
+        'station_password',
+    ];
+
+    protected $casts = [
+        'station_password' => 'hashed',
     ];
 
     public function stations()

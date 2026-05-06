@@ -9,6 +9,7 @@ use Agence104\LiveKit\AccessTokenOptions;
 use Agence104\LiveKit\VideoGrant;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
 
 class LivekitTokenController extends Controller
 {
@@ -238,9 +239,18 @@ class LivekitTokenController extends Controller
     }
 
     // Station token to join own room
-    public function station(string $StoreId, Station $station)
+    public function station(Request $request, string $StoreId, Station $station)
     {
-        $storeId = $this->resolveStoreId($StoreId);
+        $data = $request->validate([
+            'password' => 'required|string',
+        ]);
+
+        $store = Store::where('store_number', $StoreId)->firstOrFail();
+        if (empty($store->station_password) || !Hash::check($data['password'], $store->station_password)) {
+            abort(403, 'Invalid station password.');
+        }
+
+        $storeId = (int) $store->id;
         if ((int) $station->store_id !== $storeId) {
             abort(404, 'Station not found for provided storeId.');
         }

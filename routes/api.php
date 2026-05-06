@@ -1,6 +1,7 @@
 <?php
 
 use App\Http\Controllers\StationController;
+use App\Http\Controllers\StoreController;
 use App\Http\Controllers\LivekitAdminController;
 use App\Http\Controllers\LivekitParticipantController;
 use App\Http\Controllers\LivekitTokenController;
@@ -8,10 +9,11 @@ use Illuminate\Support\Facades\Route;
 
 Route::prefix('{StoreId}')->middleware('auth.token.store')
     ->group(function () {
-        Route::get('/stations', [StationController::class, 'index']);
+        Route::get('/stations', [StationController::class, 'index'])->withoutMiddleware('auth.token.store');
         Route::post('/stations', [StationController::class, 'store']);
+        Route::post('/stations/password', [StoreController::class, 'setStationPassword']);
         Route::delete('/stations/{station}', [StationController::class, 'destroy']);
-        Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station']);
+        Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station'])->withoutMiddleware('auth.token.store');
         Route::post('/tokens/supervisor', [LivekitTokenController::class, 'supervisor']);
     });
 
