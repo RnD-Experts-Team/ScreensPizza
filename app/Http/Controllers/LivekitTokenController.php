@@ -265,7 +265,7 @@ class LivekitTokenController extends Controller
             ->setRoomName($room)
             ->setCanPublish(true)
             ->setCanSubscribe(true)
-            ->setCanPublishData(false);
+            ->setCanPublishData(true);
 
         $token = (new AccessToken(
             config('livekit.api_key'),
@@ -284,7 +284,7 @@ class LivekitTokenController extends Controller
             'store_number' => $StoreId,
             'can_publish' => true,
             'can_subscribe' => true,
-            'can_publish_data' => false,
+            'can_publish_data' => true,
         ]);
 
         return response()->json([
