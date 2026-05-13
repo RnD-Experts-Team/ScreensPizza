@@ -206,7 +206,7 @@
             "post": {
                 "tags": ["StationMedia"],
                 "summary": "Init chunked media upload",
-                "description": "Start a chunked upload. This API is stateless: the server does not track uploads beyond storing chunks on disk. Steps:\n1) Pick a chunk size within server limits (upload_max_filesize/post_max_size).\n2) Split the file into N parts and number them 0..N-1.\n3) Call this endpoint with total_chunks=N to get upload_id.\n4) Upload each chunk with PUT /media/uploads/{upload}/chunks/{chunkIndex} using multipart form field 'chunk'.\n5) Call the complete endpoint with the same total_chunks and metadata to assemble the file.",
+                "description": "Start a chunked upload. This API is stateless: the server does not track uploads beyond storing chunks on disk. Steps:\n1) Pick a chunk size within server limits (upload_max_filesize/post_max_size).\n2) Split the file into N parts and number them 0..N-1.\n3) Call this endpoint with total_chunks=N to get upload_id.\n4) Upload each chunk with POST /media/uploads/{upload}/chunks/{chunkIndex} using multipart form field 'chunk'.\n5) Call the complete endpoint with the same total_chunks and metadata to assemble the file.",
                 "parameters": [
                     {
                         "name": "storeId",
@@ -257,7 +257,7 @@
             }
         },
         "/{storeId}/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}": {
-            "put": {
+            "post": {
                 "tags": ["StationMedia"],
                 "summary": "Upload a media chunk",
                 "description": "Upload one chunk (binary). chunkIndex is zero-based. Chunks can be uploaded in any order; re-uploading the same chunkIndex overwrites the previous part. Use upload_id from the init endpoint.",
