@@ -11,7 +11,11 @@
             "description": "Laravel API base path"
         }
     ],
-    "tags": [{ "name": "Stations" }, { "name": "Tokens" }],
+    "tags": [
+        { "name": "Stations" },
+        { "name": "StationMedia" },
+        { "name": "Tokens" }
+    ],
     "paths": {
         "/{storeId}/stations": {
             "get": {
@@ -156,6 +160,464 @@
                 }
             }
         },
+        "/{storeId}/stations/{station}/media": {
+            "get": {
+                "tags": ["StationMedia"],
+                "summary": "List station media",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Station media list",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "station_id": { "type": "integer" },
+                                        "media": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/StationMedia"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/uploads": {
+            "post": {
+                "tags": ["StationMedia"],
+                "summary": "Init chunked media upload",
+                "description": "Start a chunked upload. This API is stateless: the server does not track uploads beyond storing chunks on disk. Steps:\n1) Pick a chunk size within server limits (upload_max_filesize/post_max_size).\n2) Split the file into N parts and number them 0..N-1.\n3) Call this endpoint with total_chunks=N to get upload_id.\n4) Upload each chunk with PUT /media/uploads/{upload}/chunks/{chunkIndex} using multipart form field 'chunk'.\n5) Call the complete endpoint with the same total_chunks and metadata to assemble the file.",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["total_chunks"],
+                                "properties": {
+                                    "total_chunks": { "type": "integer" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Upload session created",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "upload_id": { "type": "string" },
+                                        "station_id": { "type": "integer" },
+                                        "total_chunks": { "type": "integer" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}": {
+            "put": {
+                "tags": ["StationMedia"],
+                "summary": "Upload a media chunk",
+                "description": "Upload one chunk (binary). chunkIndex is zero-based. Chunks can be uploaded in any order; re-uploading the same chunkIndex overwrites the previous part. Use upload_id from the init endpoint.",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    },
+                    {
+                        "name": "upload",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "chunkIndex",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "multipart/form-data": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["chunk"],
+                                "properties": {
+                                    "chunk": {
+                                        "type": "string",
+                                        "format": "binary"
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Chunk stored",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "upload_id": { "type": "string" },
+                                        "chunk_index": { "type": "integer" },
+                                        "path": { "type": "string" }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/uploads/{upload}/complete": {
+            "post": {
+                "tags": ["StationMedia"],
+                "summary": "Finalize a chunked upload",
+                "description": "Finalize an upload by assembling chunks 0..N-1 in order. The server verifies all chunks exist and the final size matches total_size, then writes the final file to public storage and creates the media record. If is_primary is true, the existing primary media is cleared. Returns 422 if chunks are missing or size mismatch.",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    },
+                    {
+                        "name": "upload",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": [
+                                    "type",
+                                    "file_name",
+                                    "total_size",
+                                    "total_chunks"
+                                ],
+                                "properties": {
+                                    "type": {
+                                        "type": "string",
+                                        "enum": ["image", "video"]
+                                    },
+                                    "file_name": { "type": "string" },
+                                    "mime_type": {
+                                        "type": "string",
+                                        "nullable": true
+                                    },
+                                    "total_size": { "type": "integer" },
+                                    "total_chunks": { "type": "integer" },
+                                    "duration_seconds": {
+                                        "type": "integer",
+                                        "nullable": true
+                                    },
+                                    "width": {
+                                        "type": "integer",
+                                        "nullable": true
+                                    },
+                                    "height": {
+                                        "type": "integer",
+                                        "nullable": true
+                                    },
+                                    "is_primary": { "type": "boolean" }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Media created",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "media": {
+                                            "$ref": "#/components/schemas/StationMedia"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/uploads/complete-bulk": {
+            "post": {
+                "tags": ["StationMedia"],
+                "summary": "Finalize multiple uploads",
+                "description": "Finalize multiple uploads in one request. Provide one entry per upload_id with the same metadata you would send to the single complete endpoint. Each upload is assembled independently; failures return per-item errors.",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["uploads"],
+                                "properties": {
+                                    "uploads": {
+                                        "type": "array",
+                                        "items": {
+                                            "type": "object",
+                                            "required": [
+                                                "upload_id",
+                                                "type",
+                                                "file_name",
+                                                "total_size",
+                                                "total_chunks"
+                                            ],
+                                            "properties": {
+                                                "upload_id": {
+                                                    "type": "string"
+                                                },
+                                                "type": {
+                                                    "type": "string",
+                                                    "enum": ["image", "video"]
+                                                },
+                                                "file_name": {
+                                                    "type": "string"
+                                                },
+                                                "mime_type": {
+                                                    "type": "string",
+                                                    "nullable": true
+                                                },
+                                                "total_size": {
+                                                    "type": "integer"
+                                                },
+                                                "total_chunks": {
+                                                    "type": "integer"
+                                                },
+                                                "duration_seconds": {
+                                                    "type": "integer",
+                                                    "nullable": true
+                                                },
+                                                "width": {
+                                                    "type": "integer",
+                                                    "nullable": true
+                                                },
+                                                "height": {
+                                                    "type": "integer",
+                                                    "nullable": true
+                                                },
+                                                "is_primary": {
+                                                    "type": "boolean"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Bulk completion results",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "results": {
+                                            "type": "array",
+                                            "items": { "type": "object" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/{media}/primary": {
+            "post": {
+                "tags": ["StationMedia"],
+                "summary": "Set primary media",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    },
+                    {
+                        "name": "media",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Primary media set",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "media": {
+                                            "$ref": "#/components/schemas/StationMedia"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" }
+                }
+            }
+        },
+        "/{storeId}/stations/{station}/media/bulk": {
+            "delete": {
+                "tags": ["StationMedia"],
+                "summary": "Bulk delete station media",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" }
+                    },
+                    {
+                        "name": "station",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "integer" }
+                    }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["ids"],
+                                "properties": {
+                                    "ids": {
+                                        "type": "array",
+                                        "items": { "type": "integer" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Media deleted",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "deleted_ids": {
+                                            "type": "array",
+                                            "items": { "type": "integer" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
         "/{storeId}/tokens/stations/{station}": {
             "post": {
                 "tags": ["Tokens"],
@@ -203,7 +665,13 @@
                                         "storeId": { "type": "string" },
                                         "store_id": { "type": "integer" },
                                         "room": { "type": "string" },
-                                        "token": { "type": "string" }
+                                        "token": { "type": "string" },
+                                        "media": {
+                                            "type": "array",
+                                            "items": {
+                                                "$ref": "#/components/schemas/StationMedia"
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -254,6 +722,12 @@
                                                     },
                                                     "token": {
                                                         "type": "string"
+                                                    },
+                                                    "media": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "$ref": "#/components/schemas/StationMedia"
+                                                        }
                                                     }
                                                 }
                                             }
@@ -354,6 +828,24 @@
                         "format": "date-time",
                         "nullable": true
                     }
+                }
+            },
+            "StationMedia": {
+                "type": "object",
+                "properties": {
+                    "id": { "type": "integer" },
+                    "station_id": { "type": "integer" },
+                    "type": { "type": "string", "enum": ["image", "video"] },
+                    "is_primary": { "type": "boolean" },
+                    "url": { "type": "string" },
+                    "file_name": { "type": "string", "nullable": true },
+                    "mime_type": { "type": "string", "nullable": true },
+                    "size_bytes": { "type": "integer", "nullable": true },
+                    "duration_seconds": { "type": "integer", "nullable": true },
+                    "width": { "type": "integer", "nullable": true },
+                    "height": { "type": "integer", "nullable": true },
+                    "created_at": { "type": "string", "format": "date-time" },
+                    "updated_at": { "type": "string", "format": "date-time" }
                 }
             },
             "IssuedToken": {

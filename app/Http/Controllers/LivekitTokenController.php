@@ -38,6 +38,18 @@ class LivekitTokenController extends Controller
         ]);
     }
 
+    protected function stationMediaPayload(Station $station): array
+    {
+        $station->loadMissing('media');
+
+        return $station->media
+            ->map(function ($media) {
+                return $media->toArray();
+            })
+            ->values()
+            ->all();
+    }
+
     public function index(Request $request)
     {
         $storeId = null;
@@ -293,6 +305,7 @@ class LivekitTokenController extends Controller
             'store_id' => $storeId,
             'room' => $room,
             'token' => $token,
+            'media' => $this->stationMediaPayload($station),
         ]);
     }
 
@@ -301,16 +314,19 @@ class LivekitTokenController extends Controller
     {
         $storeId = $this->resolveStoreId($StoreId);
 
-        $rooms = Station::where('store_id', $storeId)
-            ->pluck('room_name')
-            ->values();
+        $stations = Station::where('store_id', $storeId)
+            ->with('media')
+            ->get();
+
+        $rooms = $stations->pluck('room_name')->values();
 
         $identity = 'supervisor:' . $storeId;
         $storeNumber = $StoreId;
         $ttl = 4 * 60 * 60;
 
         // Room admin is room-scoped in LiveKit, so mint one admin token per room.
-        $tokens = $rooms->map(function ($room) use ($identity, $ttl, $storeId, $storeNumber) {
+        $tokens = $stations->map(function (Station $station) use ($identity, $ttl, $storeId, $storeNumber) {
+            $room = $station->room_name;
             $grant = (new VideoGrant())
                 ->setRoomJoin(true)
                 ->setRoomName($room)
@@ -354,6 +370,7 @@ class LivekitTokenController extends Controller
             return [
                 'room' => $room,
                 'token' => $token,
+                'media' => $this->stationMediaPayload($station),
             ];
         })->values();
 

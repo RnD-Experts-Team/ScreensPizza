@@ -15,4 +15,11 @@ class Station extends Model
     {
         return $this->belongsTo(Store::class);
     }
+
+    public function media()
+    {
+        return $this->hasMany(StationMedia::class)
+            ->orderByDesc('is_primary')
+            ->orderBy('id');
+    }
 }
