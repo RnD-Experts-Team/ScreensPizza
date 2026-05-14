@@ -747,6 +747,71 @@
                     "422": { "$ref": "#/components/responses/ValidationError" }
                 }
             }
+        },
+        "/{storeId}/tokens/observer": {
+            "post": {
+                "tags": ["Tokens"],
+                "summary": "Issue observer tokens for all store rooms",
+                "parameters": [
+                    {
+                        "name": "storeId",
+                        "in": "path",
+                        "required": true,
+                        "schema": { "type": "string" },
+                        "description": "Store number"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Room-scoped observer tokens",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "server_url": { "type": "string" },
+                                        "storeId": { "type": "string" },
+                                        "store_id": { "type": "integer" },
+                                        "identity": { "type": "string" },
+                                        "rooms": {
+                                            "type": "array",
+                                            "items": { "type": "string" }
+                                        },
+                                        "tokens": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "room": {
+                                                        "type": "string"
+                                                    },
+                                                    "token": {
+                                                        "type": "string"
+                                                    },
+                                                    "media": {
+                                                        "type": "array",
+                                                        "items": {
+                                                            "$ref": "#/components/schemas/StationMedia"
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        "permissions": {
+                                            "type": "object",
+                                            "additionalProperties": {
+                                                "type": "boolean"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
         }
     },
     "components": {
