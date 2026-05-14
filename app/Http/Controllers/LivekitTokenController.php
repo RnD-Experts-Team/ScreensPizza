@@ -395,4 +395,75 @@ class LivekitTokenController extends Controller
             ],
         ]);
     }
+
+    public function observer(string $StoreId)
+    {
+        $storeId = $this->resolveStoreId($StoreId);
+
+        $stations = Station::where('store_id', $storeId)
+            ->with('media')
+            ->get();
+
+        $rooms = $stations->pluck('room_name')->values();
+
+        $identity = 'observer:' . $storeId;
+        $storeNumber = $StoreId;
+        $ttl = 4 * 60 * 60;
+
+        // Observer: invisible, listen-only token per room.
+        $tokens = $stations->map(function (Station $station) use ($identity, $ttl, $storeId, $storeNumber) {
+            $room = $station->room_name;
+            $grant = (new VideoGrant())
+                ->setHidden(true)
+                ->setRoomJoin(true)
+                ->setRoomName($room)
+                ->setCanSubscribe(true)
+                ->setCanPublish(false)
+                ->setCanPublishData(false);
+
+            $token = (new AccessToken(
+                config('livekit.api_key'),
+                config('livekit.api_secret')
+            ))
+                ->init(
+                    (new AccessTokenOptions())
+                        ->setIdentity($identity)
+                        ->setTtl($ttl)
+                )
+                ->setGrant($grant)
+                ->toJwt();
+
+            $this->storeIssuedToken('observer', $identity, $room, $token, $ttl, [
+                'store_id' => $storeId,
+                'store_number' => $storeNumber,
+                'room_join' => true,
+                'can_subscribe' => true,
+                'can_publish' => false,
+                'can_publish_data' => false,
+                'hidden' => true,
+            ]);
+
+            return [
+                'room' => $room,
+                'token' => $token,
+                'media' => $this->stationMediaPayload($station),
+            ];
+        })->values();
+
+        return response()->json([
+            'server_url' => config('livekit.host'),
+            'storeId' => $StoreId,
+            'store_id' => $storeId,
+            'identity' => $identity,
+            'rooms' => $rooms,
+            'tokens' => $tokens,
+            'permissions' => [
+                'room_join' => true,
+                'can_subscribe' => true,
+                'can_publish' => false,
+                'can_publish_data' => false,
+                'hidden' => true,
+            ],
+        ]);
+    }
 }

@@ -23,6 +23,7 @@ Route::prefix('{StoreId}')->middleware('auth.token.store')
         Route::delete('/stations/{station}/media/bulk', [StationMediaController::class, 'bulkDelete']);
         Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station'])->withoutMiddleware('auth.token.store');
         Route::post('/tokens/supervisor', [LivekitTokenController::class, 'supervisor']);
+        Route::post('/tokens/observer', [LivekitTokenController::class, 'observer']);
     });
 
 // // Participant listing/removal
