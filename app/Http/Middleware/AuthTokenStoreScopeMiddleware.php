@@ -131,13 +131,13 @@ class AuthTokenStoreScopeMiddleware
         }
 
         // 7) DO NOT REPLICATE USERS HERE.
-        $user = User::query()->find($userId);
-        if (!$user) {
-            abort(401, 'Unauthorized: user not synced yet');
-        }
+        // $user = User::query()->find($userId);
+        // if (!$user) {
+        //     abort(401, 'Unauthorized: user not synced yet');
+        // }
 
-        // 8) Login for session-based parts of this app
-        Auth::login($user);
+        // // 8) Login for session-based parts of this app
+        // Auth::login($user);
 
         return $next($request);
     }
