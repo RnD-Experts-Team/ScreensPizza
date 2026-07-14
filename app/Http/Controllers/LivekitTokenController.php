@@ -309,14 +309,25 @@ class LivekitTokenController extends Controller
         ]);
     }
 
-    // Supervisor token for all rooms in a store
-    public function supervisor(string $StoreId)
+    // Supervisor token for all rooms in a store, optionally filtered by ?stations=1,2,3
+    public function supervisor(Request $request, string $StoreId)
     {
         $storeId = $this->resolveStoreId($StoreId);
 
-        $stations = Station::where('store_id', $storeId)
-            ->with('media')
-            ->get();
+        $query = Station::where('store_id', $storeId)->with('media');
+
+        if ($request->filled('stations')) {
+            $stationIds = collect((array) $request->query('stations'))
+                ->flatMap(fn ($value) => explode(',', (string) $value))
+                ->map(fn ($value) => trim($value))
+                ->filter(fn ($value) => $value !== '')
+                ->unique()
+                ->values();
+
+            $query->whereIn('id', $stationIds);
+        }
+
+        $stations = $query->get();
 
         $rooms = $stations->pluck('room_name')->values();
 
