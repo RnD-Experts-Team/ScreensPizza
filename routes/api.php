@@ -8,7 +8,7 @@ use App\Http\Controllers\LivekitTokenController;
 use App\Http\Controllers\StationMediaController;
 use Illuminate\Support\Facades\Route;
 
-Route::prefix('{StoreId}')->middleware('auth.token.store')
+Route::prefix('{storeId}')->middleware('auth.token.store')
     ->group(function () {
         Route::get('/stations', [StationController::class, 'index'])->withoutMiddleware('auth.token.store');
         Route::post('/stations', [StationController::class, 'store']);
