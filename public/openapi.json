@@ -686,7 +686,7 @@
         "/{storeId}/tokens/supervisor": {
             "post": {
                 "tags": ["Tokens"],
-                "summary": "Issue supervisor tokens for all store rooms",
+                "summary": "Issue supervisor tokens for all store rooms. For the store's Drive Through room, the token is voice-only (no camera publish).",
                 "parameters": [
                     {
                         "name": "storeId",
@@ -728,6 +728,10 @@
                                                         "items": {
                                                             "$ref": "#/components/schemas/StationMedia"
                                                         }
+                                                    },
+                                                    "can_publish_camera": {
+                                                        "type": "boolean",
+                                                        "description": "False for the Drive Through room: this token can publish voice but never camera."
                                                     }
                                                 }
                                             }
@@ -883,6 +887,11 @@
                     "store_id": { "type": "integer" },
                     "name": { "type": "string" },
                     "room_name": { "type": "string" },
+                    "type": {
+                        "type": "string",
+                        "enum": ["standard", "drive_through"],
+                        "description": "'drive_through' is system-managed: one is auto-created per store and cannot be created or deleted via the stations endpoints."
+                    },
                     "created_at": {
                         "type": "string",
                         "format": "date-time",

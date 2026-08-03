@@ -338,6 +338,8 @@ class LivekitTokenController extends Controller
         // Room admin is room-scoped in LiveKit, so mint one admin token per room.
         $tokens = $stations->map(function (Station $station) use ($identity, $ttl, $storeId, $storeNumber) {
             $room = $station->room_name;
+            $isDriveThrough = $station->isDriveThrough();
+
             $grant = (new VideoGrant())
                 ->setRoomJoin(true)
                 ->setRoomName($room)
@@ -350,6 +352,11 @@ class LivekitTokenController extends Controller
                 ->setCanPublishData(true)
                 ->setCanUpdateOwnMetadata(true)
                 ->setCanSubscribeMetrics(true);
+
+            if ($isDriveThrough) {
+                // Drive Through: authenticated staff share voice only, never camera.
+                $grant->setCanPublishSources(['microphone']);
+            }
 
             $token = (new AccessToken(
                 config('livekit.api_key'),
@@ -376,12 +383,14 @@ class LivekitTokenController extends Controller
                 'can_publish_data' => true,
                 'can_update_own_metadata' => true,
                 'can_subscribe_metrics' => true,
+                'can_publish_camera' => !$isDriveThrough,
             ]);
 
             return [
                 'room' => $room,
                 'token' => $token,
                 'media' => $this->stationMediaPayload($station),
+                'can_publish_camera' => !$isDriveThrough,
             ];
         })->values();
 
