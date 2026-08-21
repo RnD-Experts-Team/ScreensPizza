@@ -31,6 +31,7 @@ class StationController extends Controller
             'store_id' => $this->resolveStoreId($StoreId),
             'name' => $data['name'],
             'room_name' => $data['room_name'],
+            'type' => Station::TYPE_STANDARD,
         ]);
     }
 
@@ -39,6 +40,10 @@ class StationController extends Controller
         $storeId = $this->resolveStoreId($StoreId);
         if ((int) $station->store_id !== $storeId) {
             abort(404, 'Station not found for provided storeId.');
+        }
+
+        if ($station->isDriveThrough()) {
+            abort(422, 'Drive Through station cannot be deleted.');
         }
 
         $station->delete();
