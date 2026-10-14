@@ -108,6 +108,8 @@ class AuthTokenStoreScopeMiddleware
         $request->attributes->set('authz_roles', (array) ($verify['roles'] ?? []));
         $request->attributes->set('authz_permissions', (array) ($verify['permissions'] ?? []));
         $request->attributes->set('authz_ext', (array) ($verify['ext'] ?? []));
+        $request->attributes->set('authz_user_id', $userId);
+        $request->attributes->set('authz_user_name', data_get($verify, 'user.name'));
 
         if ($subjectType === 'employee') {
             // Employees are replicated from hiring.v1.employee.* events into

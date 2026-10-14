@@ -6,6 +6,7 @@ use App\Http\Controllers\LivekitAdminController;
 use App\Http\Controllers\LivekitParticipantController;
 use App\Http\Controllers\LivekitTokenController;
 use App\Http\Controllers\StationMediaController;
+use App\Http\Controllers\ScreenUsageController;
 use Illuminate\Support\Facades\Route;
 
 Route::prefix('{storeId}')->middleware('auth.token.store')
@@ -24,6 +25,8 @@ Route::prefix('{storeId}')->middleware('auth.token.store')
         Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station'])->withoutMiddleware('auth.token.store');
         Route::post('/tokens/supervisor', [LivekitTokenController::class, 'supervisor']);
         Route::post('/tokens/observer', [LivekitTokenController::class, 'observer']);
+        Route::post('/usage/segments', [ScreenUsageController::class, 'store']);
+        Route::get('/usage/segments', [ScreenUsageController::class, 'index']);
     });
 
 // // Participant listing/removal

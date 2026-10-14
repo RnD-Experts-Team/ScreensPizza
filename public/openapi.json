@@ -14,7 +14,8 @@
     "tags": [
         { "name": "Stations" },
         { "name": "StationMedia" },
-        { "name": "Tokens" }
+        { "name": "Tokens" },
+        { "name": "Usage" }
     ],
     "paths": {
         "/{storeId}/stations": {
@@ -805,6 +806,109 @@
                                             "type": "object",
                                             "additionalProperties": {
                                                 "type": "boolean"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/{storeId}/usage/segments": {
+            "post": {
+                "tags": ["Usage"],
+                "summary": "Report the calling manager's usage segments (user and store come from the token)",
+                "parameters": [
+                    { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Store number" }
+                ],
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["segments"],
+                                "properties": {
+                                    "segments": {
+                                        "type": "array",
+                                        "maxItems": 200,
+                                        "items": {
+                                            "type": "object",
+                                            "required": ["id", "kind", "surface", "started_at", "ended_at"],
+                                            "properties": {
+                                                "id": { "type": "string", "description": "ULID made by the browser; re-sending the same id updates ended_at, talking_seconds and end_reason" },
+                                                "room": { "type": ["string", "null"], "description": "Station room of this store; null only for talk_all" },
+                                                "kind": { "type": "string", "enum": ["session", "main", "camera", "mic", "talk_all"] },
+                                                "state": { "type": ["string", "null"], "enum": ["visible", "no_face", "covered", "open", "dead", null] },
+                                                "surface": { "type": "string", "enum": ["page", "pip"] },
+                                                "started_at": { "type": "string", "format": "date-time" },
+                                                "ended_at": { "type": "string", "format": "date-time" },
+                                                "talking_seconds": { "type": "integer" },
+                                                "end_reason": { "type": ["string", "null"], "description": "session only: left, duplicate_identity, network, ..." }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "responses": {
+                    "204": { "description": "Recorded" },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            },
+            "get": {
+                "tags": ["Usage"],
+                "summary": "Usage segments overlapping a range (max 62 days) plus the store's stations",
+                "parameters": [
+                    { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Store number" },
+                    { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+                    { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+                    { "name": "user_id", "in": "query", "required": false, "schema": { "type": "integer" } }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "Stations and raw segments (UTC)",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "stations": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "id": { "type": "integer" },
+                                                    "name": { "type": "string" },
+                                                    "room_name": { "type": "string" },
+                                                    "type": { "type": "string" }
+                                                }
+                                            }
+                                        },
+                                        "segments": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "id": { "type": "string" },
+                                                    "station_id": { "type": ["integer", "null"] },
+                                                    "user_id": { "type": "integer" },
+                                                    "user_name": { "type": ["string", "null"] },
+                                                    "kind": { "type": "string" },
+                                                    "state": { "type": ["string", "null"] },
+                                                    "surface": { "type": "string" },
+                                                    "started_at": { "type": "string", "format": "date-time" },
+                                                    "ended_at": { "type": "string", "format": "date-time" },
+                                                    "talking_seconds": { "type": "integer" },
+                                                    "end_reason": { "type": ["string", "null"] }
+                                                }
                                             }
                                         }
                                     }
