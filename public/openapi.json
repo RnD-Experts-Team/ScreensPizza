@@ -833,9 +833,10 @@
                                 "type": "object",
                                 "required": ["segments"],
                                 "properties": {
+                                    "sent_at": { "type": "string", "format": "date-time", "description": "The browser's clock when it built the batch; a wrong client clock is corrected by the difference to server time" },
                                     "segments": {
                                         "type": "array",
-                                        "maxItems": 200,
+                                        "maxItems": 500,
                                         "items": {
                                             "type": "object",
                                             "required": ["id", "kind", "surface", "started_at", "ended_at"],
@@ -862,60 +863,39 @@
                     "404": { "$ref": "#/components/responses/NotFound" },
                     "422": { "$ref": "#/components/responses/ValidationError" }
                 }
-            },
+            }
+        },
+        "/usage/report": {
             "get": {
                 "tags": ["Usage"],
-                "summary": "Usage segments overlapping a range (max 62 days) plus the store's stations",
+                "summary": "Screen Project monitoring report across stores, aggregated (every duration in seconds)",
+                "description": "The caller must hold `screens manager` at EVERY store in stores[]. Days and weekday x hour buckets are in `tz`.",
                 "parameters": [
-                    { "name": "storeId", "in": "path", "required": true, "schema": { "type": "string" }, "description": "Store number" },
+                    { "name": "stores[]", "in": "query", "required": true, "schema": { "type": "array", "items": { "type": "string" } }, "description": "Store numbers" },
                     { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-                    { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
-                    { "name": "user_id", "in": "query", "required": false, "schema": { "type": "integer" } }
+                    { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" }, "description": "Exclusive; range at most 92 days" },
+                    { "name": "tz", "in": "query", "required": false, "schema": { "type": "string" }, "description": "IANA time zone of the viewer (default UTC)" },
+                    { "name": "users[]", "in": "query", "required": false, "schema": { "type": "array", "items": { "type": "integer" } }, "description": "Only these managers" }
                 ],
                 "responses": {
-                    "200": {
-                        "description": "Stations and raw segments (UTC)",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "stations": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "id": { "type": "integer" },
-                                                    "name": { "type": "string" },
-                                                    "room_name": { "type": "string" },
-                                                    "type": { "type": "string" }
-                                                }
-                                            }
-                                        },
-                                        "segments": {
-                                            "type": "array",
-                                            "items": {
-                                                "type": "object",
-                                                "properties": {
-                                                    "id": { "type": "string" },
-                                                    "station_id": { "type": ["integer", "null"] },
-                                                    "user_id": { "type": "integer" },
-                                                    "user_name": { "type": ["string", "null"] },
-                                                    "kind": { "type": "string" },
-                                                    "state": { "type": ["string", "null"] },
-                                                    "surface": { "type": "string" },
-                                                    "started_at": { "type": "string", "format": "date-time" },
-                                                    "ended_at": { "type": "string", "format": "date-time" },
-                                                    "talking_seconds": { "type": "integer" },
-                                                    "end_reason": { "type": ["string", "null"] }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
+                    "200": { "description": "range, totals, users (per manager), stores, screens (incl. never watched), days, hours {present, away} [weekday 0=Mon][hour], camera, mic, managers (filter options)" },
+                    "404": { "$ref": "#/components/responses/NotFound" },
+                    "422": { "$ref": "#/components/responses/ValidationError" }
+                }
+            }
+        },
+        "/usage/timeline": {
+            "get": {
+                "tags": ["Usage"],
+                "summary": "One manager's raw usage segments over at most two days (the day timeline)",
+                "parameters": [
+                    { "name": "stores[]", "in": "query", "required": true, "schema": { "type": "array", "items": { "type": "string" } }, "description": "Store numbers" },
+                    { "name": "user_id", "in": "query", "required": true, "schema": { "type": "integer" } },
+                    { "name": "from", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } },
+                    { "name": "to", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" } }
+                ],
+                "responses": {
+                    "200": { "description": "segments: id, store, station (name), kind, state, surface, started_at, ended_at, talking_seconds, end_reason" },
                     "404": { "$ref": "#/components/responses/NotFound" },
                     "422": { "$ref": "#/components/responses/ValidationError" }
                 }

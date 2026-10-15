@@ -7,7 +7,14 @@ use App\Http\Controllers\LivekitParticipantController;
 use App\Http\Controllers\LivekitTokenController;
 use App\Http\Controllers\StationMediaController;
 use App\Http\Controllers\ScreenUsageController;
+use App\Http\Controllers\ScreenUsageReportController;
 use Illuminate\Support\Facades\Route;
+
+// Screen Project monitoring across stores (stores[] = store numbers, checked by the auth server).
+Route::middleware('auth.token.store')->group(function () {
+    Route::get('/usage/report', [ScreenUsageReportController::class, 'report']);
+    Route::get('/usage/timeline', [ScreenUsageReportController::class, 'timeline']);
+});
 
 Route::prefix('{storeId}')->middleware('auth.token.store')
     ->group(function () {
@@ -26,7 +33,6 @@ Route::prefix('{storeId}')->middleware('auth.token.store')
         Route::post('/tokens/supervisor', [LivekitTokenController::class, 'supervisor']);
         Route::post('/tokens/observer', [LivekitTokenController::class, 'observer']);
         Route::post('/usage/segments', [ScreenUsageController::class, 'store']);
-        Route::get('/usage/segments', [ScreenUsageController::class, 'index']);
     });
 
 // // Participant listing/removal
