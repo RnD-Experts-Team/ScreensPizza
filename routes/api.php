@@ -10,29 +10,35 @@ use App\Http\Controllers\ScreenUsageController;
 use App\Http\Controllers\ScreenUsageReportController;
 use Illuminate\Support\Facades\Route;
 
+// Rate limits (AppServiceProvider): `throttle:api` covers every route, ahead of
+// the pizzasys call. The two public routes and uploads add their own tier on
+// top. The usage heartbeat and upload chunks REPLACE it with their own tier,
+// since the general limit is lower and would cap them.
+
 // Screen Project monitoring across stores (stores[] = store numbers, checked by the auth server).
-Route::middleware('auth.token.store')->group(function () {
+Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
     Route::get('/usage/report', [ScreenUsageReportController::class, 'report']);
     Route::get('/usage/timeline', [ScreenUsageReportController::class, 'timeline']);
 });
 
-Route::prefix('{storeId}')->middleware('auth.token.store')
+Route::prefix('{storeId}')->middleware(['throttle:api', 'auth.token.store'])
     ->group(function () {
-        Route::get('/stations', [StationController::class, 'index'])->withoutMiddleware('auth.token.store');
+        Route::get('/stations', [StationController::class, 'index'])->withoutMiddleware('auth.token.store')->middleware('throttle:api-public');
         Route::post('/stations', [StationController::class, 'store']);
         Route::post('/stations/password', [StoreController::class, 'setStationPassword']);
         Route::delete('/stations/{station}', [StationController::class, 'destroy']);
         Route::get('/stations/{station}/media', [StationMediaController::class, 'index']);
-        Route::post('/stations/{station}/media/uploads', [StationMediaController::class, 'initUpload']);
-        Route::post('/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}', [StationMediaController::class, 'uploadChunk']);
-        Route::post('/stations/{station}/media/uploads/{upload}/complete', [StationMediaController::class, 'completeUpload']);
-        Route::post('/stations/{station}/media/uploads/complete-bulk', [StationMediaController::class, 'completeUploadsBulk']);
+        Route::post('/stations/{station}/media/uploads', [StationMediaController::class, 'initUpload'])->middleware('throttle:api-upload');
+        Route::post('/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}', [StationMediaController::class, 'uploadChunk'])->withoutMiddleware('throttle:api')->middleware('throttle:api-upload-chunk');
+        Route::post('/stations/{station}/media/uploads/{upload}/complete', [StationMediaController::class, 'completeUpload'])->middleware('throttle:api-upload');
+        Route::post('/stations/{station}/media/uploads/complete-bulk', [StationMediaController::class, 'completeUploadsBulk'])->middleware('throttle:api-upload');
         Route::post('/stations/{station}/media/{media}/primary', [StationMediaController::class, 'setPrimary']);
         Route::delete('/stations/{station}/media/bulk', [StationMediaController::class, 'bulkDelete']);
-        Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station'])->withoutMiddleware('auth.token.store');
+        // Takes the store's station password, no bearer token.
+        Route::post('/tokens/stations/{station}', [LivekitTokenController::class, 'station'])->withoutMiddleware('auth.token.store')->middleware('throttle:station-token');
         Route::post('/tokens/supervisor', [LivekitTokenController::class, 'supervisor']);
         Route::post('/tokens/observer', [LivekitTokenController::class, 'observer']);
-        Route::post('/usage/segments', [ScreenUsageController::class, 'store']);
+        Route::post('/usage/segments', [ScreenUsageController::class, 'store'])->withoutMiddleware('throttle:api')->middleware('throttle:api-poll');
     });
 
 // // Participant listing/removal
