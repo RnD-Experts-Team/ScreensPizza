@@ -47,4 +47,7 @@ return [
         // Redis caching on client side
         'cache_ttl' => (int) env('AUTH_SERVER_CACHE_TTL', 30),
     ],
+
+    // Shared secret for the auth.secret.key routes (the Excel export), sent as X-Secret-Key.
+    'x_secret_key' => env('X_SECRET_KEY'),
 ];

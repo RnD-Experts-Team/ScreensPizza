@@ -134,19 +134,15 @@ class ScreenUsageReport
         $userRows = [];
 
         foreach ($users as $uid => $u) {
-            $l = array_map([$this, 'merge'], $u['lists']);
-            $onScreen = $l['session'];
-            $present = $l['visible'];
-            $away = $this->subtract($onScreen, $present);
-            $covered = $this->subtract($l['covered'], $present);
-            $noFace = $this->subtract($this->subtract($l['no_face'], $present), $covered);
-            $camOff = $this->subtract($onScreen, $l['camera']);
-            $micOff = $this->subtract($onScreen, $l['mic']);
+            $sets = $this->derive($u['lists']);
+            $onScreen = $sets['on_screen'];
+            $present = $sets['present'];
+            $away = $sets['away'];
 
             $t = fn (array $ivs) => $this->total($ivs);
-            $micOpen = $t($l['mic']);
+            $micOpen = $t($sets['mic_open']);
             $talking = (int) round(min($micOpen, $u['talking']));
-            $dead = $t($l['dead']);
+            $dead = $t($sets['dead_mic']);
 
             // Favorite screen: the longest in the main tile.
             $mainTotals = [];
@@ -163,16 +159,16 @@ class ScreenUsageReport
                 'on_screen' => $t($onScreen),
                 'present' => $t($present),
                 'away' => $t($away),
-                'no_face' => $t($noFace),
-                'covered' => $t($covered),
-                'camera_off' => $t($camOff),
+                'no_face' => $t($sets['no_face']),
+                'covered' => $t($sets['covered']),
+                'camera_off' => $t($sets['camera_off']),
                 'mic_open' => $micOpen,
                 'talking' => $talking,
                 'silent' => max(0, $micOpen - $talking - $dead),
                 'dead_mic' => $dead,
-                'talk_all' => $t($l['talk_all']),
+                'talk_all' => $t($sets['talk_all']),
                 'talk_all_talking' => (int) round($u['talk_all_talking']),
-                'pip' => $t($l['pip']),
+                'pip' => $t($sets['pip']),
                 'visits' => count($onScreen),
                 'kicks' => $u['kicks'],
                 'last_seen' => Carbon::createFromTimestamp($u['last_seen'])->toIso8601String(),
@@ -192,7 +188,7 @@ class ScreenUsageReport
             $mic['talking'] += $row['talking'];
             $mic['dead'] += $row['dead_mic'];
             $mic['silent'] += $row['silent'];
-            $mic['off'] += $t($micOff);
+            $mic['off'] += $t($sets['mic_off']);
 
             // Per day / per weekday-hour, in the viewer's clock.
             $this->bucket($onScreen, $zone, function (string $day, int $wd, int $h, int $sec) use (&$days, $uid) {
@@ -287,6 +283,156 @@ class ScreenUsageReport
             'hours' => $hours,
             'camera' => $camera,
             'mic' => $mic,
+        ];
+    }
+
+    /**
+     * The same numbers as build()'s managers, split by local day and store: one row per
+     * day × store × manager, every duration in seconds. A manager's overlapping segments
+     * are merged within each store; `visits` counts the on-screen stretches that start on
+     * the day, `kicks` the duplicate-login cuts that happen on it.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @return list<array<string, int|string>>
+     */
+    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz): array
+    {
+        $fromTs = $from->getTimestamp();
+        $toTs = $to->getTimestamp();
+        $zone = new DateTimeZone($tz);
+        $day = fn (int $ts) => (new DateTimeImmutable('@'.$ts))->setTimezone($zone)->format('Y-m-d');
+
+        $groups = [];
+        $query = ScreenUsageSegment::query()->toBase()
+            ->whereIn('store_id', array_keys($stores))
+            ->where('started_at', '<', $to)
+            ->where('ended_at', '>', $from)
+            ->orderBy('started_at')
+            ->select(['user_id', 'user_name', 'store_id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds', 'end_reason']);
+
+        foreach ($query->cursor() as $s) {
+            $start = Carbon::parse($s->started_at, 'UTC')->getTimestamp();
+            $end = Carbon::parse($s->ended_at, 'UTC')->getTimestamp();
+            $a = max($start, $fromTs);
+            $b = min($end, $toTs);
+            if ($b <= $a) {
+                continue;
+            }
+            $iv = [$a, $b];
+            $g = &$groups[$s->user_id.'|'.$s->store_id];
+            $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'name' => null,
+                'lists' => array_fill_keys(self::LISTS, []), 'mic_spans' => [], 'kicks' => []];
+            $g['name'] = $s->user_name ?: $g['name'];
+
+            switch ($s->kind) {
+                case 'session':
+                    $g['lists']['session'][] = $iv;
+                    if ($s->surface === 'pip') {
+                        $g['lists']['pip'][] = $iv;
+                    }
+                    if ($s->end_reason === 'duplicate_identity' && $end <= $toTs) {
+                        $g['kicks'][$day($end)] = ($g['kicks'][$day($end)] ?? 0) + 1;
+                    }
+                    break;
+                case 'camera':
+                    $g['lists']['camera'][] = $iv;
+                    if (in_array($s->state, ['visible', 'no_face', 'covered'], true)) {
+                        $g['lists'][$s->state][] = $iv;
+                    }
+                    break;
+                case 'mic':
+                    $g['lists']['mic'][] = $iv;
+                    if ($s->state === 'dead') {
+                        $g['lists']['dead'][] = $iv;
+                    }
+                    // Talking seconds, pro-rated when only part of the segment is inside the range.
+                    $g['mic_spans'][] = [$a, $b, $end > $start ? $s->talking_seconds * (($b - $a) / ($end - $start)) : 0];
+                    break;
+                case 'talk_all':
+                    $g['lists']['talk_all'][] = $iv;
+                    break;
+            }
+            unset($g);
+        }
+
+        $rows = [];
+        foreach ($groups as $g) {
+            $sets = $this->derive($g['lists']);
+            $days = [];
+            foreach ($sets as $metric => $ivs) {
+                $this->bucket($ivs, $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $metric) {
+                    $days[$d][$metric] = ($days[$d][$metric] ?? 0) + $sec;
+                });
+            }
+            foreach ($sets['on_screen'] as [$a]) {
+                $days[$day($a)]['visits'] = ($days[$day($a)]['visits'] ?? 0) + 1;
+            }
+            foreach ($g['mic_spans'] as [$a, $b, $talk]) {
+                $len = $b - $a;
+                $this->bucket([[$a, $b]], $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $talk, $len) {
+                    $days[$d]['talking'] = ($days[$d]['talking'] ?? 0) + $talk * ($sec / $len);
+                });
+            }
+            foreach ($g['kicks'] as $d => $n) {
+                $days[$d]['kicks'] = $n;
+            }
+
+            foreach ($days as $d => $m) {
+                $micOpen = $m['mic_open'] ?? 0;
+                $dead = $m['dead_mic'] ?? 0;
+                $talking = (int) round(min($micOpen, $m['talking'] ?? 0));
+                $rows[] = [
+                    'date' => $d,
+                    'store' => $stores[$g['store_id']] ?? (string) $g['store_id'],
+                    'user_id' => $g['user_id'],
+                    'name' => $g['name'] ?: "#{$g['user_id']}",
+                    'on_screen' => $m['on_screen'] ?? 0,
+                    'present' => $m['present'] ?? 0,
+                    'away' => $m['away'] ?? 0,
+                    'no_face' => $m['no_face'] ?? 0,
+                    'covered' => $m['covered'] ?? 0,
+                    'camera_off' => $m['camera_off'] ?? 0,
+                    'mic_open' => $micOpen,
+                    'talking' => $talking,
+                    'silent' => max(0, $micOpen - $talking - $dead),
+                    'dead_mic' => $dead,
+                    'talk_all' => $m['talk_all'] ?? 0,
+                    'pip' => $m['pip'] ?? 0,
+                    'visits' => $m['visits'] ?? 0,
+                    'kicks' => $m['kicks'] ?? 0,
+                ];
+            }
+        }
+
+        usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['name']] <=> [$y['date'], $y['store'], $y['name']]);
+
+        return $rows;
+    }
+
+    /**
+     * The merged interval sets every number is read from, out of one manager's raw lists.
+     *
+     * @param  array<string, list<array{0:int,1:int}>>  $lists
+     * @return array<string, list<array{0:int,1:int}>>
+     */
+    private function derive(array $lists): array
+    {
+        $l = array_map([$this, 'merge'], $lists);
+        $present = $l['visible'];
+        $covered = $this->subtract($l['covered'], $present);
+
+        return [
+            'on_screen' => $l['session'],
+            'present' => $present,
+            'away' => $this->subtract($l['session'], $present),
+            'covered' => $covered,
+            'no_face' => $this->subtract($this->subtract($l['no_face'], $present), $covered),
+            'camera_off' => $this->subtract($l['session'], $l['camera']),
+            'mic_open' => $l['mic'],
+            'mic_off' => $this->subtract($l['session'], $l['mic']),
+            'dead_mic' => $l['dead'],
+            'talk_all' => $l['talk_all'],
+            'pip' => $l['pip'],
         ];
     }
 

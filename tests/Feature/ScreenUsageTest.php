@@ -226,11 +226,59 @@ class ScreenUsageTest extends TestCase
         $this->assertCount(2, $r['managers'], 'the filter list ignores the filter');
     }
 
-    public function test_report_requires_stores_and_bounds_the_range(): void
+    public function test_report_requires_stores_but_not_a_short_range(): void
     {
         $this->getReport(['stores' => []])->assertUnprocessable();
         $this->getReport(['stores' => ['nope']])->assertNotFound();
-        $this->getReport(['from' => '2026-01-01T00:00:00Z', 'to' => '2026-10-01T00:00:00Z'])->assertStatus(422);
+        $this->getReport(['from' => '2025-01-01T00:00:00Z', 'to' => '2026-10-01T00:00:00Z'])->assertOk();
+    }
+
+    /** @return list<array<string, string>> the CSV's rows keyed by header */
+    private function export(array $query, string $secret = 'excel-secret'): array
+    {
+        config(['services.x_secret_key' => 'excel-secret']);
+        $csv = $this->withHeader('X-Secret-Key', $secret)
+            ->get('/api/usage/export?' . http_build_query($query))
+            ->assertOk()
+            ->assertHeader('Content-Type', 'text/csv; charset=UTF-8')
+            ->streamedContent();
+        $lines = array_map(fn ($line) => str_getcsv($line, escape: ''), array_filter(explode("\n", $csv)));
+        $header = array_shift($lines);
+
+        return array_map(fn ($line) => array_combine($header, $line), $lines);
+    }
+
+    public function test_export_splits_by_day_store_and_manager_in_the_stores_clock(): void
+    {
+        Store::create(['id' => 8, 'store_number' => '1002']);
+        // 03:00-05:00 UTC is 23:00-01:00 in New York: one hour on each local day.
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 120, []],
+            ['camera', 'visible', 0, 60, []],
+            ['mic', 'open', 0, 120, ['talking_seconds' => 1800]],
+        ], Carbon::parse('2026-10-12 03:00:00', 'UTC'));
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 30, ['store_id' => 8, 'end_reason' => 'duplicate_identity']]]);
+
+        $rows = $this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12']);
+
+        $this->assertSame(
+            [['2026-10-11', '1001'], ['2026-10-12', '1001'], ['2026-10-12', '1002']],
+            array_map(fn ($r) => [$r['Date'], $r['Store']], $rows),
+        );
+        $this->assertSame(['1', '1', '0', '0.25'], [$rows[0]['Connected hours'], $rows[0]['Present hours'], $rows[0]['Away hours'], $rows[0]['Talking hours']]);
+        $this->assertSame(['1', '0', '1', '0.25'], [$rows[1]['Connected hours'], $rows[1]['Present hours'], $rows[1]['Away hours'], $rows[1]['Talking hours']]);
+        $this->assertSame(['Maria Manager', '42', '0.5', '1', '1'], [$rows[2]['Manager'], $rows[2]['Manager ID'], $rows[2]['Connected hours'], $rows[2]['Visits'], $rows[2]['Kicks']]);
+
+        $this->assertSame(['1002'], array_column($this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12', 'stores' => '1002']), 'Store'));
+    }
+
+    public function test_export_needs_the_secret_and_valid_dates_but_no_range_cap(): void
+    {
+        config(['services.x_secret_key' => 'excel-secret']);
+        $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export?start_date=2026-10-11&end_date=2026-10-12')->assertUnauthorized();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export?start_date=2025-01-01&end_date=2026-10-31')->assertOk();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export?start_date=2026-10-12&end_date=2026-10-11')->assertUnprocessable();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->getJson('/api/usage/export?start_date=2026-10-11&end_date=2026-10-12&stores=nope')->assertNotFound();
     }
 
     public function test_timeline_returns_one_managers_segments_with_names(): void
