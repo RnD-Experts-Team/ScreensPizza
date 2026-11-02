@@ -16,6 +16,7 @@ return Application::configure(basePath: dirname(__DIR__))
         $middleware->alias([
             'auth.token.store' => \App\Http\Middleware\AuthTokenStoreScopeMiddleware::class, // Add this
             'throttle' => \App\Http\Middleware\ObservableThrottleRequests::class,
+            'auth.secret.key' => \App\Http\Middleware\CheckSecretKeyMiddleware::class,
         ]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {

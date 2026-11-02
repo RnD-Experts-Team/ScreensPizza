@@ -98,6 +98,23 @@ class AppServiceProvider extends ServiceProvider
                 Limit::perHour(20)->by('target:h:'.$key),
             ];
         });
+
+        // auth.secret.key routes (the Excel export): per secret and IP, as in LC_PIZZA_DATA.
+        // The secret is read the way CheckSecretKeyMiddleware reads it, and only its hash is kept.
+        RateLimiter::for('service-secret', function (Request $request) {
+            $secret = (string) $request->header('X-Secret-Key', '');
+            if ($secret === '') {
+                $secret = (string) $request->input('X-Secret-Key', $request->input('x_secret_key', ''));
+            }
+
+            $key = 's:'.hash('sha256', $secret).'|'.$request->ip();
+
+            return [
+                Limit::perMinute(60)->by($key),
+                Limit::perMinute(10)->by('target:m:'.$key),
+                Limit::perHour(60)->by('target:h:'.$key),
+            ];
+        });
     }
 
     /**
