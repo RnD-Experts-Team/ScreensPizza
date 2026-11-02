@@ -226,11 +226,11 @@ class ScreenUsageTest extends TestCase
         $this->assertCount(2, $r['managers'], 'the filter list ignores the filter');
     }
 
-    public function test_report_requires_stores_and_bounds_the_range(): void
+    public function test_report_requires_stores_but_not_a_short_range(): void
     {
         $this->getReport(['stores' => []])->assertUnprocessable();
         $this->getReport(['stores' => ['nope']])->assertNotFound();
-        $this->getReport(['from' => '2026-01-01T00:00:00Z', 'to' => '2026-10-01T00:00:00Z'])->assertStatus(422);
+        $this->getReport(['from' => '2025-01-01T00:00:00Z', 'to' => '2026-10-01T00:00:00Z'])->assertOk();
     }
 
     /** @return list<array<string, string>> the CSV's rows keyed by header */
@@ -272,11 +272,11 @@ class ScreenUsageTest extends TestCase
         $this->assertSame(['1002'], array_column($this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12', 'stores' => '1002']), 'Store'));
     }
 
-    public function test_export_needs_the_secret_and_a_bounded_range(): void
+    public function test_export_needs_the_secret_and_valid_dates_but_no_range_cap(): void
     {
         config(['services.x_secret_key' => 'excel-secret']);
         $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export?start_date=2026-10-11&end_date=2026-10-12')->assertUnauthorized();
-        $this->withHeader('X-Secret-Key', 'excel-secret')->getJson('/api/usage/export?start_date=2026-01-01&end_date=2026-10-01')->assertStatus(422);
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export?start_date=2025-01-01&end_date=2026-10-31')->assertOk();
         $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export?start_date=2026-10-12&end_date=2026-10-11')->assertUnprocessable();
         $this->withHeader('X-Secret-Key', 'excel-secret')->getJson('/api/usage/export?start_date=2026-10-11&end_date=2026-10-12&stores=nope')->assertNotFound();
     }

@@ -15,8 +15,6 @@ use Illuminate\Support\Facades\Validator;
  */
 class ScreenUsageReportController extends Controller
 {
-    public const MAX_RANGE_DAYS = 92;
-
     /** The export's days, when no tz is sent: the stores' own clock. */
     private const EXPORT_TIMEZONE = 'America/New_York';
 
@@ -80,7 +78,8 @@ class ScreenUsageReportController extends Controller
         ]);
 
         $stores = $this->resolveStores($data['stores']);
-        [$from, $to] = $this->range($data, self::MAX_RANGE_DAYS);
+        $from = Carbon::parse($data['from'])->utc();
+        $to = Carbon::parse($data['to'])->utc();
 
         $result = $report->build($stores, $from, $to, $data['users'] ?? null, $data['tz'] ?? 'UTC');
 
@@ -121,10 +120,8 @@ class ScreenUsageReportController extends Controller
         $stores = $numbers === [] ? Store::pluck('store_number', 'id')->all() : $this->resolveStores($numbers);
 
         $tz = $data['tz'] ?? self::EXPORT_TIMEZONE;
-        [$from, $to] = $this->range([
-            'from' => Carbon::parse($data['start_date'], $tz)->startOfDay()->toIso8601String(),
-            'to' => Carbon::parse($data['end_date'], $tz)->addDay()->startOfDay()->toIso8601String(),
-        ], self::MAX_RANGE_DAYS);
+        $from = Carbon::parse($data['start_date'], $tz)->startOfDay()->utc();
+        $to = Carbon::parse($data['end_date'], $tz)->addDay()->startOfDay()->utc();
 
         $rows = $report->dailyRows($stores, $from, $to, $tz);
 
