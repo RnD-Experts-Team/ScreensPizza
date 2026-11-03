@@ -292,13 +292,15 @@ class ScreenUsageReport
      * are merged within each store; `visits` counts the on-screen stretches that start on
      * the day, `kicks` the duplicate-login cuts that happen on it.
      *
-     * With $byStation each row is also one station, read from that station's segments only:
-     * `main` is its time in the big tile, and a manager connected to several stations at once
-     * counts that time in each, so station rows do not add up to the manager's total.
-     * Talk-to-all has no station and is left out.
+     * With $byStation each of those rows is cut further by the station in the manager's
+     * main tile at each moment: the station's row holds the time it was in the main tile
+     * (connected, present, talking... during it), and time with no station in the main tile
+     * goes to a row with no station. So, column by column, a manager's station rows add up
+     * to their row without $byStation. When two tiles claim the main tile at once, the one
+     * that took it last wins.
      *
      * @param  array<int, string>  $stores  store id => store number
-     * @return list<array<string, int|string>>
+     * @return list<array<string, int|float|string|null>>
      */
     public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false): array
     {
@@ -320,14 +322,13 @@ class ScreenUsageReport
             $end = Carbon::parse($s->ended_at, 'UTC')->getTimestamp();
             $a = max($start, $fromTs);
             $b = min($end, $toTs);
-            if ($b <= $a || ($byStation && $s->station_id === null)) {
+            if ($b <= $a) {
                 continue;
             }
             $iv = [$a, $b];
-            $station = $byStation ? (int) $s->station_id : null;
-            $g = &$groups[$s->user_id.'|'.$s->store_id.'|'.$station];
-            $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'station_id' => $station, 'name' => null,
-                'lists' => array_fill_keys(self::LISTS, []), 'main' => [], 'mic_spans' => [], 'kicks' => []];
+            $g = &$groups[$s->user_id.'|'.$s->store_id];
+            $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'name' => null,
+                'lists' => array_fill_keys(self::LISTS, []), 'tiles' => [], 'mic_spans' => [], 'kicks' => []];
             $g['name'] = $s->user_name ?: $g['name'];
 
             switch ($s->kind) {
@@ -337,11 +338,13 @@ class ScreenUsageReport
                         $g['lists']['pip'][] = $iv;
                     }
                     if ($s->end_reason === 'duplicate_identity' && $end <= $toTs) {
-                        $g['kicks'][$day($end)] = ($g['kicks'][$day($end)] ?? 0) + 1;
+                        $g['kicks'][] = $end;
                     }
                     break;
                 case 'main':
-                    $g['main'][] = $iv;
+                    if ($byStation && $s->station_id !== null) {
+                        $g['tiles'][] = [$a, $b, (int) $s->station_id];
+                    }
                     break;
                 case 'camera':
                     $g['lists']['camera'][] = $iv;
@@ -365,64 +368,129 @@ class ScreenUsageReport
         }
 
         $stationNames = $byStation
-            ? Station::whereIn('id', array_unique(array_column($groups, 'station_id')))->pluck('name', 'id')->all()
+            ? Station::whereIn('id', array_unique(array_merge([], ...array_map(fn ($g) => array_column($g['tiles'], 2), array_values($groups)))))->pluck('name', 'id')->all()
             : [];
 
         $rows = [];
         foreach ($groups as $g) {
-            $sets = $this->derive($g['lists']) + ['main' => $this->merge($g['main'])];
+            $sets = $this->derive($g['lists']);
+            unset($sets['mic_off']);
+
+            // The parts this manager's time is cut into: one per main-tile station, plus the
+            // rest (key ''). Without $byStation the rest is everything.
+            $tiles = $this->mainTiles($g['tiles']);
+            $tiled = $this->merge(array_merge([], ...array_values($tiles)));
+            $cut = fn (string $part, array $ivs) => $part === ''
+                ? $this->subtract($ivs, $tiled)
+                : $this->subtract($ivs, $this->subtract($ivs, $tiles[$part]));
+            $partAt = function (int $ts) use ($tiles): string {
+                foreach ($tiles as $station => $ivs) {
+                    foreach ($ivs as [$a, $b]) {
+                        if ($ts >= $a && $ts < $b) {
+                            return (string) $station;
+                        }
+                    }
+                }
+
+                return '';
+            };
+
             $days = [];
-            foreach ($sets as $metric => $ivs) {
-                $this->bucket($ivs, $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $metric) {
-                    $days[$d][$metric] = ($days[$d][$metric] ?? 0) + $sec;
-                });
+            $rawTalk = [];
+            foreach (array_merge([''], array_map('strval', array_keys($tiles))) as $part) {
+                foreach ($sets as $metric => $ivs) {
+                    $this->bucket($cut($part, $ivs), $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $part, $metric) {
+                        $days[$d][$part][$metric] = ($days[$d][$part][$metric] ?? 0) + $sec;
+                    });
+                }
+                foreach ($g['mic_spans'] as [$a, $b, $talk]) {
+                    $len = $b - $a;
+                    $this->bucket($cut($part, [[$a, $b]]), $zone, function (string $d, int $wd, int $h, int $sec) use (&$rawTalk, $part, $talk, $len) {
+                        $rawTalk[$d][$part] = ($rawTalk[$d][$part] ?? 0) + $talk * ($sec / $len);
+                    });
+                }
             }
             foreach ($sets['on_screen'] as [$a]) {
-                $days[$day($a)]['visits'] = ($days[$day($a)]['visits'] ?? 0) + 1;
+                $days[$day($a)][$partAt($a)]['visits'] = ($days[$day($a)][$partAt($a)]['visits'] ?? 0) + 1;
             }
-            foreach ($g['mic_spans'] as [$a, $b, $talk]) {
-                $len = $b - $a;
-                $this->bucket([[$a, $b]], $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $talk, $len) {
-                    $days[$d]['talking'] = ($days[$d]['talking'] ?? 0) + $talk * ($sec / $len);
-                });
-            }
-            foreach ($g['kicks'] as $d => $n) {
-                $days[$d]['kicks'] = $n;
+            foreach ($g['kicks'] as $ts) {
+                $days[$day($ts)][$partAt($ts - 1)]['kicks'] = ($days[$day($ts)][$partAt($ts - 1)]['kicks'] ?? 0) + 1;
             }
 
-            foreach ($days as $d => $m) {
-                $micOpen = $m['mic_open'] ?? 0;
-                $dead = $m['dead_mic'] ?? 0;
-                $talking = (int) round(min($micOpen, $m['talking'] ?? 0));
-                $rows[] = [
-                    'date' => $d,
-                    'store' => $stores[$g['store_id']] ?? (string) $g['store_id'],
-                    'station_id' => $g['station_id'],
-                    'station' => $g['station_id'] === null ? null : ($stationNames[$g['station_id']] ?? "#{$g['station_id']}"),
-                    'user_id' => $g['user_id'],
-                    'name' => $g['name'] ?: "#{$g['user_id']}",
-                    'on_screen' => $m['on_screen'] ?? 0,
-                    'main' => $m['main'] ?? 0,
-                    'present' => $m['present'] ?? 0,
-                    'away' => $m['away'] ?? 0,
-                    'no_face' => $m['no_face'] ?? 0,
-                    'covered' => $m['covered'] ?? 0,
-                    'camera_off' => $m['camera_off'] ?? 0,
-                    'mic_open' => $micOpen,
-                    'talking' => $talking,
-                    'silent' => max(0, $micOpen - $talking - $dead),
-                    'dead_mic' => $dead,
-                    'talk_all' => $m['talk_all'] ?? 0,
-                    'pip' => $m['pip'] ?? 0,
-                    'visits' => $m['visits'] ?? 0,
-                    'kicks' => $m['kicks'] ?? 0,
-                ];
+            foreach ($days as $d => $parts) {
+                // The day's talking, capped at its mic time as in build(), then shared out
+                // by where it was said, so the parts add up to the manager's day.
+                $micOpenDay = array_sum(array_map(fn ($m) => $m['mic_open'] ?? 0, $parts));
+                $rawDay = array_sum($rawTalk[$d] ?? []);
+                $talkDay = (int) round(min($micOpenDay, $rawDay));
+
+                foreach ($parts as $part => $m) {
+                    $micOpen = $m['mic_open'] ?? 0;
+                    $dead = $m['dead_mic'] ?? 0;
+                    $talking = $rawDay > 0 ? $talkDay * (($rawTalk[$d][$part] ?? 0) / $rawDay) : 0;
+                    $station = $part === '' ? null : (int) $part;
+                    $row = [
+                        'date' => $d,
+                        'store' => $stores[$g['store_id']] ?? (string) $g['store_id'],
+                        'station_id' => $station,
+                        'station' => $station === null ? ($byStation ? 'No main tile' : null) : ($stationNames[$station] ?? "#{$station}"),
+                        'user_id' => $g['user_id'],
+                        'name' => $g['name'] ?: "#{$g['user_id']}",
+                        'on_screen' => $m['on_screen'] ?? 0,
+                        'present' => $m['present'] ?? 0,
+                        'away' => $m['away'] ?? 0,
+                        'no_face' => $m['no_face'] ?? 0,
+                        'covered' => $m['covered'] ?? 0,
+                        'camera_off' => $m['camera_off'] ?? 0,
+                        'mic_open' => $micOpen,
+                        'talking' => $talking,
+                        'silent' => max(0, $micOpen - $talking - $dead),
+                        'dead_mic' => $dead,
+                        'talk_all' => $m['talk_all'] ?? 0,
+                        'pip' => $m['pip'] ?? 0,
+                        'visits' => $m['visits'] ?? 0,
+                        'kicks' => $m['kicks'] ?? 0,
+                    ];
+                    if (array_filter(array_slice($row, 6)) !== []) {
+                        $rows[] = $row;
+                    }
+                }
             }
         }
 
         usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['station'], $x['name']] <=> [$y['date'], $y['store'], $y['station'], $y['name']]);
 
         return $rows;
+    }
+
+    /**
+     * One manager's main-tile segments ([from, to, station]) as non-overlapping time per
+     * station: where two overlap, the one that started later holds the main tile.
+     *
+     * @param  list<array{0:int,1:int,2:int}>  $tiles
+     * @return array<int, list<array{0:int,1:int}>>  station id => merged intervals
+     */
+    private function mainTiles(array $tiles): array
+    {
+        usort($tiles, fn ($x, $y) => $x[0] <=> $y[0]);
+        $points = array_values(array_unique(array_merge(array_column($tiles, 0), array_column($tiles, 1))));
+        sort($points);
+
+        $out = [];
+        $active = [];
+        $next = 0;
+        for ($k = 0; $k < count($points) - 1; $k++) {
+            [$p, $q] = [$points[$k], $points[$k + 1]];
+            while ($next < count($tiles) && $tiles[$next][0] <= $p) {
+                $active[] = $tiles[$next++];
+            }
+            $active = array_values(array_filter($active, fn ($t) => $t[1] > $p));
+            if ($active !== []) {
+                $out[$active[count($active) - 1][2]][] = [$p, $q];
+            }
+        }
+
+        return array_map([$this, 'merge'], $out);
     }
 
     /**

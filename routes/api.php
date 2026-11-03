@@ -20,7 +20,7 @@ Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
     Route::get('/usage/report', [ScreenUsageReportController::class, 'report']);
     Route::get('/usage/timeline', [ScreenUsageReportController::class, 'timeline']);
 });
-// The same numbers as CSV for Excel, per manager (/usage/export) or per station and manager
+// The same numbers as CSV for Excel, per manager (/usage/export) or cut by the station in the main tile
 // (/usage/export/stations): ?start_date=&end_date=[&stores=a,b][&tz=], no stores = every store.
 // A shared secret (X-Secret-Key), not a user token: its own rate limit and no pizzasys auth rule.
 Route::get('/usage/export', [ScreenUsageReportController::class, 'export'])->middleware(['throttle:service-secret', 'auth.secret.key']);
