@@ -340,7 +340,7 @@ class ThrottleTest extends TestCase
             'POST api/{storeId}/stations/{station}/media/uploads/{upload}/complete',
         ], $routesWith('throttle:api-upload'));
         $this->assertSame(['POST api/{storeId}/usage/segments'], $routesWith('throttle:api-poll'));
-        $this->assertSame(['GET api/usage/export'], $routesWith('throttle:service-secret'));
+        $this->assertSame(['GET api/usage/export', 'GET api/usage/export/stations'], $routesWith('throttle:service-secret'));
 
         // The heartbeat and chunks swap the general limit for their own tier.
         $general = collect(Route::getRoutes()->getRoutes())
