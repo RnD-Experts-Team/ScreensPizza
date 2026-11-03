@@ -292,10 +292,15 @@ class ScreenUsageReport
      * are merged within each store; `visits` counts the on-screen stretches that start on
      * the day, `kicks` the duplicate-login cuts that happen on it.
      *
+     * With $byStation each row is also one station, read from that station's segments only:
+     * `main` is its time in the big tile, and a manager connected to several stations at once
+     * counts that time in each, so station rows do not add up to the manager's total.
+     * Talk-to-all has no station and is left out.
+     *
      * @param  array<int, string>  $stores  store id => store number
      * @return list<array<string, int|string>>
      */
-    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz): array
+    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false): array
     {
         $fromTs = $from->getTimestamp();
         $toTs = $to->getTimestamp();
@@ -308,20 +313,21 @@ class ScreenUsageReport
             ->where('started_at', '<', $to)
             ->where('ended_at', '>', $from)
             ->orderBy('started_at')
-            ->select(['user_id', 'user_name', 'store_id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds', 'end_reason']);
+            ->select(['user_id', 'user_name', 'store_id', 'station_id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds', 'end_reason']);
 
         foreach ($query->cursor() as $s) {
             $start = Carbon::parse($s->started_at, 'UTC')->getTimestamp();
             $end = Carbon::parse($s->ended_at, 'UTC')->getTimestamp();
             $a = max($start, $fromTs);
             $b = min($end, $toTs);
-            if ($b <= $a) {
+            if ($b <= $a || ($byStation && $s->station_id === null)) {
                 continue;
             }
             $iv = [$a, $b];
-            $g = &$groups[$s->user_id.'|'.$s->store_id];
-            $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'name' => null,
-                'lists' => array_fill_keys(self::LISTS, []), 'mic_spans' => [], 'kicks' => []];
+            $station = $byStation ? (int) $s->station_id : null;
+            $g = &$groups[$s->user_id.'|'.$s->store_id.'|'.$station];
+            $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'station_id' => $station, 'name' => null,
+                'lists' => array_fill_keys(self::LISTS, []), 'main' => [], 'mic_spans' => [], 'kicks' => []];
             $g['name'] = $s->user_name ?: $g['name'];
 
             switch ($s->kind) {
@@ -333,6 +339,9 @@ class ScreenUsageReport
                     if ($s->end_reason === 'duplicate_identity' && $end <= $toTs) {
                         $g['kicks'][$day($end)] = ($g['kicks'][$day($end)] ?? 0) + 1;
                     }
+                    break;
+                case 'main':
+                    $g['main'][] = $iv;
                     break;
                 case 'camera':
                     $g['lists']['camera'][] = $iv;
@@ -355,9 +364,13 @@ class ScreenUsageReport
             unset($g);
         }
 
+        $stationNames = $byStation
+            ? Station::whereIn('id', array_unique(array_column($groups, 'station_id')))->pluck('name', 'id')->all()
+            : [];
+
         $rows = [];
         foreach ($groups as $g) {
-            $sets = $this->derive($g['lists']);
+            $sets = $this->derive($g['lists']) + ['main' => $this->merge($g['main'])];
             $days = [];
             foreach ($sets as $metric => $ivs) {
                 $this->bucket($ivs, $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $metric) {
@@ -384,9 +397,12 @@ class ScreenUsageReport
                 $rows[] = [
                     'date' => $d,
                     'store' => $stores[$g['store_id']] ?? (string) $g['store_id'],
+                    'station_id' => $g['station_id'],
+                    'station' => $g['station_id'] === null ? null : ($stationNames[$g['station_id']] ?? "#{$g['station_id']}"),
                     'user_id' => $g['user_id'],
                     'name' => $g['name'] ?: "#{$g['user_id']}",
                     'on_screen' => $m['on_screen'] ?? 0,
+                    'main' => $m['main'] ?? 0,
                     'present' => $m['present'] ?? 0,
                     'away' => $m['away'] ?? 0,
                     'no_face' => $m['no_face'] ?? 0,
@@ -404,7 +420,7 @@ class ScreenUsageReport
             }
         }
 
-        usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['name']] <=> [$y['date'], $y['store'], $y['name']]);
+        usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['station'], $x['name']] <=> [$y['date'], $y['store'], $y['station'], $y['name']]);
 
         return $rows;
     }

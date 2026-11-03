@@ -234,11 +234,11 @@ class ScreenUsageTest extends TestCase
     }
 
     /** @return list<array<string, string>> the CSV's rows keyed by header */
-    private function export(array $query, string $secret = 'excel-secret'): array
+    private function export(array $query, string $path = '/api/usage/export'): array
     {
         config(['services.x_secret_key' => 'excel-secret']);
-        $csv = $this->withHeader('X-Secret-Key', $secret)
-            ->get('/api/usage/export?' . http_build_query($query))
+        $csv = $this->withHeader('X-Secret-Key', 'excel-secret')
+            ->get($path . '?' . http_build_query($query))
             ->assertOk()
             ->assertHeader('Content-Type', 'text/csv; charset=UTF-8')
             ->streamedContent();
@@ -270,6 +270,28 @@ class ScreenUsageTest extends TestCase
         $this->assertSame(['Maria Manager', '42', '0.5', '1', '1'], [$rows[2]['Manager'], $rows[2]['Manager ID'], $rows[2]['Connected hours'], $rows[2]['Visits'], $rows[2]['Kicks']]);
 
         $this->assertSame(['1002'], array_column($this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12', 'stores' => '1002']), 'Store'));
+    }
+
+    public function test_station_export_splits_each_managers_time_by_station(): void
+    {
+        $till = Station::create(['store_id' => 7, 'name' => 'Till', 'room_name' => 'till-1001', 'type' => Station::TYPE_STANDARD]);
+        // Connected to both stations 08:00-09:00; the make line is in the big tile for 45 min, its camera sees a face for 30.
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 60, []],
+            ['main', null, 0, 45, []],
+            ['camera', 'visible', 0, 30, []],
+            ['talk_all', null, 0, 10, ['station_id' => null]],
+        ]);
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 60, ['station_id' => $till->id]]]);
+
+        $rows = $this->export(['start_date' => '2026-10-12', 'end_date' => '2026-10-12'], '/api/usage/export/stations');
+
+        $this->assertSame(
+            [['Make line', '1', '0.75', '0.5'], ['Till', '1', '0', '0']],
+            array_map(fn ($r) => [$r['Station'], $r['Connected hours'], $r['Main tile hours'], $r['Present hours']], $rows),
+        );
+        $this->assertSame([(string) $this->station->id, '1001', 'Maria Manager'], [$rows[0]['Station ID'], $rows[0]['Store'], $rows[0]['Manager']]);
+        $this->assertArrayNotHasKey('Talk to all hours', $rows[0]);
     }
 
     public function test_export_needs_the_secret_and_valid_dates_but_no_range_cap(): void

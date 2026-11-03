@@ -40,7 +40,31 @@ class ScreenUsageReportController extends Controller
         'Kicks' => 'kicks',
     ];
 
-    private const NOT_HOURS = ['date', 'store', 'user_id', 'name', 'visits', 'kicks'];
+    /** The per-station export: the same, plus the station and its time in the big tile; no talk-to-all. */
+    private const STATION_EXPORT_COLUMNS = [
+        'Date' => 'date',
+        'Store' => 'store',
+        'Station ID' => 'station_id',
+        'Station' => 'station',
+        'Manager ID' => 'user_id',
+        'Manager' => 'name',
+        'Connected hours' => 'on_screen',
+        'Main tile hours' => 'main',
+        'Present hours' => 'present',
+        'Away hours' => 'away',
+        'No face hours' => 'no_face',
+        'Covered hours' => 'covered',
+        'Camera off hours' => 'camera_off',
+        'Mic open hours' => 'mic_open',
+        'Talking hours' => 'talking',
+        'Silent hours' => 'silent',
+        'Dead mic hours' => 'dead_mic',
+        'Mini player hours' => 'pip',
+        'Visits' => 'visits',
+        'Kicks' => 'kicks',
+    ];
+
+    private const NOT_HOURS = ['date', 'store', 'station_id', 'station', 'user_id', 'name', 'visits', 'kicks'];
 
     /** @return array<int, string> store id => store number */
     protected function resolveStores(array $numbers): array
@@ -105,6 +129,18 @@ class ScreenUsageReportController extends Controller
      */
     public function export(Request $request, ScreenUsageReport $report)
     {
+        return $this->csv($request, $report, false, self::EXPORT_COLUMNS, 'screen-monitoring');
+    }
+
+    /** The same, one row per local day × store × station × manager. */
+    public function exportStations(Request $request, ScreenUsageReport $report)
+    {
+        return $this->csv($request, $report, true, self::STATION_EXPORT_COLUMNS, 'screen-monitoring-stations');
+    }
+
+    /** @param  array<string, string>  $columns  CSV header => dailyRows() key */
+    private function csv(Request $request, ScreenUsageReport $report, bool $byStation, array $columns, string $name)
+    {
         $validator = Validator::make($request->query(), [
             'start_date' => 'required|date_format:Y-m-d',
             'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
@@ -123,19 +159,19 @@ class ScreenUsageReportController extends Controller
         $from = Carbon::parse($data['start_date'], $tz)->startOfDay()->utc();
         $to = Carbon::parse($data['end_date'], $tz)->addDay()->startOfDay()->utc();
 
-        $rows = $report->dailyRows($stores, $from, $to, $tz);
+        $rows = $report->dailyRows($stores, $from, $to, $tz, $byStation);
 
-        return response()->streamDownload(function () use ($rows) {
+        return response()->streamDownload(function () use ($rows, $columns) {
             $out = fopen('php://output', 'w');
-            fputcsv($out, array_keys(self::EXPORT_COLUMNS), escape: '');
+            fputcsv($out, array_keys($columns), escape: '');
             foreach ($rows as $row) {
                 fputcsv($out, array_map(
                     fn (string $key) => in_array($key, self::NOT_HOURS, true) ? $row[$key] : round($row[$key] / 3600, 4),
-                    self::EXPORT_COLUMNS,
+                    $columns,
                 ), escape: '');
             }
             fclose($out);
-        }, "screen-monitoring_{$data['start_date']}_{$data['end_date']}.csv", ['Content-Type' => 'text/csv; charset=UTF-8']);
+        }, "{$name}_{$data['start_date']}_{$data['end_date']}.csv", ['Content-Type' => 'text/csv; charset=UTF-8']);
     }
 
     /** One manager's raw segments over (at most) two days — the day timeline. */
