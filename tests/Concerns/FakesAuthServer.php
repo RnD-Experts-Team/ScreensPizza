@@ -13,9 +13,12 @@ use Illuminate\Support\Facades\Http;
  */
 trait FakesAuthServer
 {
+    protected bool $tokenAuthorized = true;
+
     /**
      * Registered ONCE per test. Http::fake() MERGES stubs and the first match
-     * wins, so re-faking mid-test would silently keep the original response.
+     * wins, so re-faking mid-test would silently keep the original response:
+     * flip $tokenAuthorized instead (the stub reads it on every call).
      * preventStrayRequests() means any unmatched request fails loudly rather
      * than escaping to the network.
      */
@@ -31,13 +34,13 @@ trait FakesAuthServer
         Http::preventStrayRequests();
 
         Http::fake([
-            'auth.test/*' => Http::response([
+            'auth.test/*' => fn () => Http::response([
                 'active' => true,
                 'subject_type' => 'user',
                 'user' => ['id' => 42, 'name' => 'Maria Manager'],
                 'roles' => [],
                 'permissions' => [],
-                'ext' => ['authorized' => true],
+                'ext' => ['authorized' => $this->tokenAuthorized],
             ]),
         ]);
     }

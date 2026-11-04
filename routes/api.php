@@ -8,12 +8,23 @@ use App\Http\Controllers\LivekitTokenController;
 use App\Http\Controllers\StationMediaController;
 use App\Http\Controllers\ScreenUsageController;
 use App\Http\Controllers\ScreenUsageReportController;
+use App\Http\Controllers\ReportDatasetController;
+use App\Reports\ReportDatasets;
 use Illuminate\Support\Facades\Route;
 
 // Rate limits (AppServiceProvider): `throttle:api` covers every route, ahead of
 // the pizzasys call. The two public routes and uploads add their own tier on
 // top. The usage heartbeat and upload chunks REPLACE it with their own tier,
 // since the general limit is lower and would cap them.
+
+// The report dataset contract (the same in every service). One literal query route per
+// dataset (never a {key} parameter), so each dataset has its own pizzasys auth rule.
+// At the API root; the body's `stores` are store codes. On the general limit.
+Route::get('report-datasets', [ReportDatasetController::class, 'catalog'])->middleware(['throttle:api', 'auth.token.store']);
+foreach (ReportDatasets::DATASETS as $dataset) {
+    Route::post('report-datasets/'.$dataset::KEY.'/query', [ReportDatasetController::class, 'query'])
+        ->defaults('dataset', $dataset::KEY)->middleware(['throttle:api', 'auth.token.store']);
+}
 
 // Screen Project monitoring across stores (stores[] = store numbers, checked by the auth server).
 Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
