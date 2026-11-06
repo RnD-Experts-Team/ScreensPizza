@@ -209,6 +209,9 @@ class ScreenUsageTest extends TestCase
         $this->assertSame('2026-10-12', $r['days'][0]['date']);
         $this->assertSame(2, $r['days'][0]['managers']);
         $this->assertSame(1, $r['totals']['screens_watched']);
+        // The make line held Maria's main tile 08:00-09:30: her connected, present and talking time then.
+        $screen = collect($r['screens'])->firstWhere('station_id', $this->station->id);
+        $this->assertSame([5400, 3600, 600], [$screen['connected'], $screen['present'], $screen['talking']]);
     }
 
     public function test_report_counts_days_in_the_viewers_time_zone_and_filters_managers(): void

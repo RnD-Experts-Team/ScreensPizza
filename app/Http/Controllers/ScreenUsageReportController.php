@@ -107,6 +107,23 @@ class ScreenUsageReportController extends Controller
 
         $result = $report->build($stores, $from, $to, $data['users'] ?? null, $data['tz'] ?? 'UTC');
 
+        // Each screen's own connected / present / talking time: a manager's time goes to the
+        // screen in their main tile at that moment, as in the per-station export.
+        $byStation = [];
+        foreach ($report->dailyRows($stores, $from, $to, $data['tz'] ?? 'UTC', true, $data['users'] ?? null) as $row) {
+            if ($row['station_id'] === null) {
+                continue;
+            }
+            foreach (['connected' => 'on_screen', 'present' => 'present', 'talking' => 'talking'] as $key => $column) {
+                $byStation[$row['station_id']][$key] = ($byStation[$row['station_id']][$key] ?? 0) + $row[$column];
+            }
+        }
+        $result['screens'] = array_map(fn (array $screen) => $screen + [
+            'connected' => (int) round($byStation[$screen['station_id']]['connected'] ?? 0),
+            'present' => (int) round($byStation[$screen['station_id']]['present'] ?? 0),
+            'talking' => (int) round($byStation[$screen['station_id']]['talking'] ?? 0),
+        ], $result['screens']);
+
         // Everyone seen in these stores and dates, for the manager filter (ignores the filter itself).
         $result['managers'] = ScreenUsageSegment::query()
             ->whereIn('store_id', array_keys($stores))
