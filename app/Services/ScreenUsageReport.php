@@ -300,9 +300,10 @@ class ScreenUsageReport
      * that took it last wins.
      *
      * @param  array<int, string>  $stores  store id => store number
+     * @param  array<int>|null  $userIds  only these managers (null = all)
      * @return list<array<string, int|float|string|null>>
      */
-    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false): array
+    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false, ?array $userIds = null): array
     {
         $fromTs = $from->getTimestamp();
         $toTs = $to->getTimestamp();
@@ -314,6 +315,7 @@ class ScreenUsageReport
             ->whereIn('store_id', array_keys($stores))
             ->where('started_at', '<', $to)
             ->where('ended_at', '>', $from)
+            ->when($userIds, fn ($q) => $q->whereIn('user_id', $userIds))
             ->orderBy('started_at')
             ->select(['user_id', 'user_name', 'store_id', 'station_id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds', 'end_reason']);
 
