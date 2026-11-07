@@ -3,6 +3,7 @@
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
+use Illuminate\Http\Request;
 use PhpParser\Node\Stmt\TraitUseAdaptation\Alias;
 
 return Application::configure(basePath: dirname(__DIR__))
@@ -18,6 +19,12 @@ return Application::configure(basePath: dirname(__DIR__))
             'throttle' => \App\Http\Middleware\ObservableThrottleRequests::class,
             'auth.secret.key' => \App\Http\Middleware\CheckSecretKeyMiddleware::class,
         ]);
+
+        // The proxies themselves come from config/trustedproxy.php (TRUSTED_PROXIES).
+        $middleware->trustProxies(headers: Request::HEADER_X_FORWARDED_FOR
+            | Request::HEADER_X_FORWARDED_PROTO
+            | Request::HEADER_X_FORWARDED_HOST
+            | Request::HEADER_X_FORWARDED_PORT);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         //
