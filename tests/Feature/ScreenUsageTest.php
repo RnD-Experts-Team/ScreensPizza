@@ -229,6 +229,38 @@ class ScreenUsageTest extends TestCase
         $this->assertCount(2, $r['managers'], 'the filter list ignores the filter');
     }
 
+    public function test_boots_on_the_ground_gives_each_manager_and_station_their_time(): void
+    {
+        $register = Station::create(['store_id' => 7, 'name' => 'Register', 'room_name' => 'register-1001', 'type' => Station::TYPE_STANDARD]);
+        // Maria: the make line in her main tile 08:00-09:30, a face on camera 08:00-09:00, 10 min talking.
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 120, []],
+            ['main', null, 0, 90, []],
+            ['camera', 'visible', 0, 60, []],
+            ['mic', 'open', 0, 30, ['talking_seconds' => 600]],
+        ]);
+        // Omar, her partner at the same store: connected 30 min, present all of it, no main tile.
+        $this->seedSegments(43, 'Omar Manager', [['session', null, 0, 30, ['station_id' => null]], ['camera', 'visible', 0, 30, ['station_id' => null]]]);
+
+        $r = $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?' . http_build_query([
+            'stores' => ['1001'], 'from' => '2026-10-12T00:00:00Z', 'to' => '2026-10-13T00:00:00Z', 'tz' => 'UTC',
+        ]))->assertOk()->json();
+
+        $this->assertSame(['connected' => 7200 + 1800, 'present' => 3600 + 1800, 'talking' => 600], $r['totals']);
+        $this->assertSame(['Maria Manager', 'Omar Manager'], array_column($r['managers'], 'name'));
+        [$maria, $omar] = $r['managers'];
+        $this->assertSame(['1001'], $maria['stores']);
+        $this->assertSame([7200, 3600, 600], [$maria['connected'], $maria['present'], $maria['talking']]);
+        $this->assertSame([['station_id' => $this->station->id, 'connected' => 5400, 'present' => 3600, 'talking' => 600]], $maria['stations']);
+        $this->assertSame([], $omar['stations']);
+        // Every standard station is listed, the unwatched register too; only what the cards need.
+        $this->assertSame(['Make line', 'Register'], array_column($r['stations'], 'name'));
+        $this->assertSame($register->id, $r['stations'][1]['station_id']);
+        $this->assertSame(['range', 'totals', 'managers', 'stations'], array_keys($r));
+
+        $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?stores[]=1001')->assertUnprocessable();
+    }
+
     public function test_report_requires_stores_but_not_a_short_range(): void
     {
         $this->getReport(['stores' => []])->assertUnprocessable();

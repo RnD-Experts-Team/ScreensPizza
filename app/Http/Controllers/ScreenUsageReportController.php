@@ -140,6 +140,75 @@ class ScreenUsageReportController extends Controller
     }
 
     /**
+     * "Boots on the Ground" for the store dashboards (DSPR V1, Business Reports): who was on
+     * Screen Project at these stores, and their connected, present and talking time in total and
+     * per station (the station in their main tile at that moment). Only what those cards show, and
+     * read with the stores' report permission, not `screens manager`: every manager at a store sees
+     * the store's managers, themselves and their partners. Every standard station is listed, so a
+     * station nobody watched shows as zero. Seconds; days in `tz`.
+     */
+    public function bootsOnTheGround(Request $request, ScreenUsageReport $report)
+    {
+        $data = $request->validate([
+            'stores' => 'required|array|min:1|max:500',
+            'stores.*' => 'string',
+            'from' => 'required|date',
+            'to' => 'required|date|after:from',
+            'tz' => 'nullable|timezone:all',
+        ]);
+
+        $stores = $this->resolveStores($data['stores']);
+        $from = Carbon::parse($data['from'])->utc();
+        $to = Carbon::parse($data['to'])->utc();
+
+        $metrics = ['connected' => 'on_screen', 'present' => 'present', 'talking' => 'talking'];
+        $zero = ['connected' => 0, 'present' => 0, 'talking' => 0];
+        $totals = $zero;
+        $managers = [];
+        foreach ($report->dailyRows($stores, $from, $to, $data['tz'] ?? 'UTC', true) as $row) {
+            $id = (int) $row['user_id'];
+            $managers[$id] ??= ['user_id' => $id, 'name' => $row['name'], 'stores' => [], ...$zero, 'stations' => []];
+            $managers[$id]['stores'][$row['store']] = true;
+            foreach ($metrics as $key => $column) {
+                $totals[$key] += $row[$column];
+                $managers[$id][$key] += $row[$column];
+                if ($row['station_id'] !== null) {
+                    $managers[$id]['stations'][$row['station_id']][$key] = ($managers[$id]['stations'][$row['station_id']][$key] ?? 0) + $row[$column];
+                }
+            }
+        }
+
+        $round = fn (array $m) => array_map(fn ($v) => (int) round($v), array_intersect_key($m, $zero));
+        $managers = array_map(fn (array $m) => [
+            'user_id' => $m['user_id'],
+            'name' => $m['name'],
+            // A numeric store number became an int as an array key.
+            'stores' => array_map('strval', array_keys($m['stores'])),
+            ...$round($m),
+            'stations' => array_map(
+                fn (int $stationId, array $s) => ['station_id' => $stationId, ...$round($s + $zero)],
+                array_keys($m['stations']),
+                $m['stations'],
+            ),
+        ], array_values($managers));
+        usort($managers, fn (array $a, array $b) => strcasecmp($a['name'], $b['name']));
+
+        $stations = Station::whereIn('store_id', array_keys($stores))
+            ->where('type', Station::TYPE_STANDARD)
+            ->orderBy('store_id')->orderBy('name')
+            ->get(['id', 'store_id', 'name'])
+            ->map(fn (Station $s) => ['station_id' => $s->id, 'name' => $s->name, 'store' => $stores[$s->store_id] ?? null])
+            ->values();
+
+        return response()->json([
+            'range' => ['from' => $from->toIso8601String(), 'to' => $to->toIso8601String(), 'tz' => $data['tz'] ?? 'UTC'],
+            'totals' => $round($totals),
+            'managers' => $managers,
+            'stations' => $stations,
+        ]);
+    }
+
+    /**
      * The monitoring numbers as CSV for Excel: one row per local day × store × manager over
      * start_date..end_date (inclusive). `stores` are store numbers, comma-separated or stores[];
      * none means every store.
