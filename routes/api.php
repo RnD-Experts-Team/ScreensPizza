@@ -30,6 +30,8 @@ foreach (ReportDatasets::DATASETS as $dataset) {
 Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
     Route::get('/usage/report', [ScreenUsageReportController::class, 'report']);
     Route::get('/usage/timeline', [ScreenUsageReportController::class, 'timeline']);
+    // The store dashboards' slice of it (DSPR V1, Business Reports), under their report permission.
+    Route::get('/usage/boots-on-the-ground', [ScreenUsageReportController::class, 'bootsOnTheGround']);
 });
 // The same numbers as CSV for Excel, per manager (/usage/export) or cut by the station in the main tile
 // (/usage/export/stations): ?start_date=&end_date=[&stores=a,b][&tz=], no stores = every store.
