@@ -47,8 +47,8 @@ Route::prefix('{storeId}')->middleware(['throttle:api', 'auth.token.store'])
         Route::delete('/stations/{station}', [StationController::class, 'destroy']);
         Route::get('/stations/{station}/media', [StationMediaController::class, 'index']);
         Route::post('/stations/{station}/media/uploads', [StationMediaController::class, 'initUpload'])->middleware('throttle:api-upload');
-        Route::post('/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}', [StationMediaController::class, 'uploadChunk'])->withoutMiddleware('throttle:api')->middleware('throttle:api-upload-chunk');
-        Route::post('/stations/{station}/media/uploads/{upload}/complete', [StationMediaController::class, 'completeUpload'])->middleware('throttle:api-upload');
+        Route::post('/stations/{station}/media/uploads/{upload}/chunks/{chunkIndex}', [StationMediaController::class, 'uploadChunk'])->whereUuid('upload')->whereNumber('chunkIndex')->withoutMiddleware('throttle:api')->middleware('throttle:api-upload-chunk');
+        Route::post('/stations/{station}/media/uploads/{upload}/complete', [StationMediaController::class, 'completeUpload'])->whereUuid('upload')->middleware('throttle:api-upload');
         Route::post('/stations/{station}/media/uploads/complete-bulk', [StationMediaController::class, 'completeUploadsBulk'])->middleware('throttle:api-upload');
         Route::post('/stations/{station}/media/{media}/primary', [StationMediaController::class, 'setPrimary']);
         Route::delete('/stations/{station}/media/bulk', [StationMediaController::class, 'bulkDelete']);

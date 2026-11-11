@@ -285,7 +285,7 @@ class ThrottleTest extends TestCase
     public function test_the_upload_limits_carry_the_plan_numbers(): void
     {
         $bearer = ['HTTP_AUTHORIZATION' => 'Bearer 1|aaa'];
-        $chunk = $this->limitsFor('api-upload-chunk', 'POST', '/api/1001/stations/5/media/uploads/u1/chunks/0', $bearer);
+        $chunk = $this->limitsFor('api-upload-chunk', 'POST', '/api/1001/stations/5/media/uploads/9b2f6a52-3c1e-4c55-9a1d-2f0f1c7e8a10/chunks/0', $bearer);
         $upload = $this->limitsFor('api-upload', 'POST', '/api/1001/stations/5/media/uploads', $bearer);
 
         $this->assertSame([2000, 5000], $this->real($chunk));
@@ -299,7 +299,7 @@ class ThrottleTest extends TestCase
         config(['app.throttle_enforce' => true]);
         $this->tinyApiLimiter(real: 1);
 
-        $chunk = "/api/1001/stations/{$this->station->id}/media/uploads/u1/chunks/0";
+        $chunk = "/api/1001/stations/{$this->station->id}/media/uploads/9b2f6a52-3c1e-4c55-9a1d-2f0f1c7e8a10/chunks/0";
 
         foreach (range(1, 3) as $_) {
             $this->assertNotSame(429, $this->postJson('/api/1001/usage/segments', ['segments' => []], $this->headers())->status());

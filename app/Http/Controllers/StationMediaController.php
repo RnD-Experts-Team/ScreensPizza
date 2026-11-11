@@ -208,7 +208,7 @@ class StationMediaController extends Controller
 
         $data = $request->validate([
             'uploads' => 'required|array|min:1',
-            'uploads.*.upload_id' => 'required|string',
+            'uploads.*.upload_id' => 'required|uuid',
             'uploads.*.type' => 'required|string|in:image,video',
             'uploads.*.file_name' => 'required|string',
             'uploads.*.mime_type' => 'nullable|string',
