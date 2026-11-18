@@ -96,7 +96,7 @@ class ScreenUsageReportController extends Controller
             'stores.*' => 'string',
             'from' => 'required|date',
             'to' => 'required|date|after:from',
-            'tz' => 'nullable|timezone:all',
+            'tz' => 'nullable|timezone:all_with_bc',
             'users' => 'nullable|array',
             'users.*' => 'integer',
         ]);
@@ -154,7 +154,7 @@ class ScreenUsageReportController extends Controller
             'stores.*' => 'string',
             'from' => 'required|date',
             'to' => 'required|date|after:from',
-            'tz' => 'nullable|timezone:all',
+            'tz' => 'nullable|timezone:all_with_bc',
         ]);
 
         $stores = $this->resolveStores($data['stores']);
@@ -234,7 +234,7 @@ class ScreenUsageReportController extends Controller
             'start_date' => 'required|date_format:Y-m-d',
             'end_date' => 'required|date_format:Y-m-d|after_or_equal:start_date',
             'stores' => 'nullable',
-            'tz' => 'nullable|timezone:all',
+            'tz' => 'nullable|timezone:all_with_bc',
         ]);
         // Excel asks without Accept: application/json, so a failed validate() would redirect to "/".
         abort_if($validator->fails(), 422, $validator->errors()->first());
