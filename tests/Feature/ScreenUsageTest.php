@@ -261,6 +261,20 @@ class ScreenUsageTest extends TestCase
         $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?stores[]=1001')->assertUnprocessable();
     }
 
+    public function test_browsers_legacy_timezone_names_are_accepted(): void
+    {
+        // Chrome still reports e.g. Asia/Calcutta and Europe/Kiev, which PHP only lists as backward-compatible names.
+        foreach (['Asia/Calcutta', 'Europe/Kiev', 'Asia/Saigon', 'US/Eastern'] as $tz) {
+            $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?' . http_build_query([
+                'stores' => ['1001'], 'from' => '2026-10-12T00:00:00Z', 'to' => '2026-10-13T00:00:00Z', 'tz' => $tz,
+            ]))->assertOk();
+        }
+
+        $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?' . http_build_query([
+            'stores' => ['1001'], 'from' => '2026-10-12T00:00:00Z', 'to' => '2026-10-13T00:00:00Z', 'tz' => 'Not/AZone',
+        ]))->assertUnprocessable();
+    }
+
     public function test_report_requires_stores_but_not_a_short_range(): void
     {
         $this->getReport(['stores' => []])->assertUnprocessable();
