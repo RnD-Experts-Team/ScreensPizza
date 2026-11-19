@@ -91,4 +91,41 @@ class ScreenUsageController extends Controller
 
         return response()->noContent();
     }
+
+    /**
+     * The signed-in person's own segments over [from, to), at every store, for
+     * the live "Today" view on the Screens page. The browser adds what it has
+     * not sent yet and counts both with the report's rules. Read-only: it can
+     * show a person their numbers, never change them.
+     *
+     * `now` (server clock, ms) lets the browser line its unsent segments up
+     * with the saved ones the same way the clock-skew fix in store() does.
+     */
+    public function mine(Request $request)
+    {
+        $data = $request->validate([
+            'from' => 'required|date',
+            'to' => 'required|date|after:from',
+        ]);
+
+        $segments = ScreenUsageSegment::query()
+            ->where('user_id', (int) $request->attributes->get('authz_user_id'))
+            ->where('started_at', '<', Carbon::parse($data['to'])->utc())
+            ->where('ended_at', '>', Carbon::parse($data['from'])->utc())
+            ->orderBy('started_at')
+            ->get(['id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds']);
+
+        return response()->json([
+            'now' => now()->getTimestampMs(),
+            'segments' => $segments->map(fn ($s) => [
+                'id' => $s->id,
+                'kind' => $s->kind,
+                'state' => $s->state,
+                'surface' => $s->surface,
+                'started_at' => $s->started_at->toIso8601String(),
+                'ended_at' => $s->ended_at->toIso8601String(),
+                'talking_seconds' => $s->talking_seconds,
+            ])->values(),
+        ]);
+    }
 }

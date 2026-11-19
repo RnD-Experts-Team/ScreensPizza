@@ -32,6 +32,8 @@ Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
     Route::get('/usage/timeline', [ScreenUsageReportController::class, 'timeline']);
     // The store dashboards' slice of it (DSPR V1, Business Reports), under their report permission.
     Route::get('/usage/boots-on-the-ground', [ScreenUsageReportController::class, 'bootsOnTheGround']);
+    // The signed-in person's own segments, for the live "Today" view on the Screens page.
+    Route::get('/usage/mine', [ScreenUsageController::class, 'mine']);
 });
 // The same numbers as CSV for Excel, per manager (/usage/export) or cut by the station in the main tile
 // (/usage/export/stations): ?start_date=&end_date=[&stores=a,b][&tz=], no stores = every store.
