@@ -382,4 +382,19 @@ class ScreenUsageTest extends TestCase
             ->assertJsonPath('segments.0.station', 'Make line')
             ->assertJsonPath('segments.0.store', '1001');
     }
+
+    public function test_mine_returns_only_the_signed_in_persons_own_segments_in_range(): void
+    {
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 30, []], ['mic', 'open', 0, 30, ['talking_seconds' => 120]]]);
+        $this->seedSegments(43, 'Omar Manager', [['session', null, 0, 30, []]]);
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 30, []]], Carbon::parse('2026-10-10 08:00:00', 'UTC'));
+
+        $this->withToken('user-token')->getJson('/api/usage/mine?' . http_build_query([
+            'from' => '2026-10-12T00:00:00Z', 'to' => '2026-10-13T00:00:00Z', 'user_id' => 43,
+        ]))
+            ->assertOk()
+            ->assertJsonCount(2, 'segments')
+            ->assertJsonPath('segments.1.talking_seconds', 120)
+            ->assertJsonStructure(['now', 'segments' => [['id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds']]]);
+    }
 }
