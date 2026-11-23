@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "4a32535f9b2aae1b447858d82f0dad0a",
+    "content-hash": "c18522998bdde270e8d6e82c6dedbb3c",
     "packages": [
         {
             "name": "agence104/livekit-server-sdk",
@@ -56,6 +56,78 @@
                 "source": "https://github.com/agence104/livekit-server-sdk-php/tree/1.3.5"
             },
             "time": "2026-03-11T02:56:04+00:00"
+        },
+        {
+            "name": "basis-company/nats",
+            "version": "1.2.9",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/basis-company/nats.php.git",
+                "reference": "ed5d8793b192c319865a4c473e3974da05b7c61b"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/basis-company/nats.php/zipball/ed5d8793b192c319865a4c473e3974da05b7c61b",
+                "reference": "ed5d8793b192c319865a4c473e3974da05b7c61b",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=8.1"
+            },
+            "require-dev": {
+                "ext-sodium": "*",
+                "friendsofphp/php-cs-fixer": "*",
+                "monolog/monolog": "^2.3.5",
+                "phan/phan": "^5.3",
+                "php-coveralls/php-coveralls": "^2.5",
+                "phpstan/phpstan": "*",
+                "phpstan/phpstan-deprecation-rules": "*",
+                "phpstan/phpstan-strict-rules": "*",
+                "phpunit/phpunit": "^9.5",
+                "rector/rector": "*",
+                "sebastian/code-unit-reverse-lookup": "^2.0"
+            },
+            "suggest": {
+                "ext-sodium": "Provides Ed25519 for nkey authentication",
+                "paragonie/sodium_compat": "Provides Ed25519 for nkey authentication if sodium is not available"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Basis\\Nats\\": "src/"
+                }
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "dmitry krokhin",
+                    "email": "nekufa@gmail.com"
+                }
+            ],
+            "description": "nats jetstream client for php",
+            "keywords": [
+                "bucket",
+                "client",
+                "jetstream",
+                "key-value",
+                "messaging",
+                "nats",
+                "publish",
+                "queue",
+                "request",
+                "response",
+                "storage",
+                "streaming",
+                "subscribe"
+            ],
+            "support": {
+                "issues": "https://github.com/basis-company/nats.php/issues",
+                "source": "https://github.com/basis-company/nats.php/tree/1.2.9"
+            },
+            "time": "2026-11-22T13:12:51+00:00"
         },
         {
             "name": "brick/math",

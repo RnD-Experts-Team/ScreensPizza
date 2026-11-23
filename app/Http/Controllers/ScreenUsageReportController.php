@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 use App\Models\ScreenUsageSegment;
 use App\Models\Station;
 use App\Models\Store;
+use App\Models\User;
 use App\Services\ScreenUsageReport;
 use Illuminate\Http\Request;
 use Carbon\CarbonImmutable;
@@ -17,9 +18,6 @@ use Illuminate\Support\Facades\Validator;
  */
 class ScreenUsageReportController extends Controller
 {
-    /** The export's days, when no tz is sent: the stores' own clock. */
-    private const EXPORT_TIMEZONE = 'America/New_York';
-
     /** CSV header => dailyRows() key; durations go out in hours. */
     private const EXPORT_COLUMNS = [
         'Date' => 'date',
@@ -262,7 +260,7 @@ class ScreenUsageReportController extends Controller
         $numbers = $data['stores'] ?? [];
         $numbers = array_values(array_filter(array_map('trim', is_array($numbers) ? $numbers : explode(',', (string) $numbers))));
         $stores = $numbers === [] ? Store::pluck('store_number', 'id')->all() : $this->resolveStores($numbers);
-        $tz = $data['tz'] ?? self::EXPORT_TIMEZONE;
+        $tz = $data['tz'] ?? ScreenUsageReport::WORK_DAY_TIMEZONE;
 
         $day = CarbonImmutable::parse($data['date'])->startOfDay();
         $weekStart = $day->startOfWeek(CarbonInterface::TUESDAY);
@@ -284,11 +282,17 @@ class ScreenUsageReportController extends Controller
         ];
 
         // Every day from last fiscal year's start to `date`, read once: store => date => sums.
-        $from = Carbon::parse($prevYearStart->toDateString(), $tz)->startOfDay()->utc();
-        $to = Carbon::parse($day->toDateString(), $tz)->addDay()->startOfDay()->utc();
+        // Work days in the stores' clock (stored ones from the daily aggregate), else that zone's days.
+        if ($tz === ScreenUsageReport::WORK_DAY_TIMEZONE) {
+            $rows = $report->workDays($stores, $prevYearStart->toDateString(), $day->toDateString());
+        } else {
+            $from = Carbon::parse($prevYearStart->toDateString(), $tz)->startOfDay()->utc();
+            $to = Carbon::parse($day->toDateString(), $tz)->addDay()->startOfDay()->utc();
+            $rows = $report->dailyRows($stores, $from, $to, $tz, true);
+        }
         $daily = [];
         $weekRows = [];
-        foreach ($report->dailyRows($stores, $from, $to, $tz, true) as $row) {
+        foreach ($rows as $row) {
             $store = (string) $row['store'];
             $daily[$store][$row['date']]['video'] = ($daily[$store][$row['date']]['video'] ?? 0) + $row['present'];
             $daily[$store][$row['date']]['voice'] = ($daily[$store][$row['date']]['voice'] ?? 0) + $row['talking'];
@@ -376,6 +380,70 @@ class ScreenUsageReportController extends Controller
         ]);
     }
 
+    /**
+     * GET /usage/export/daily?date=YYYY-MM-DD[&stores=a,b]
+     *
+     * One work day, one row per manager: name, email, present and talking hours in total and
+     * on each station (the one in their main tile; "No main tile" for the rest, so the stations
+     * add up to the total). The day is shift-based in the stores' clock: every shift that
+     * started on `date` counts whole, overnight included (ScreenUsageReport::workDayRows).
+     * A stored day is read from the daily aggregate, any other from the segments; `final` says
+     * whether somebody may still be working a shift that started on it.
+     */
+    public function daily(Request $request, ScreenUsageReport $report)
+    {
+        $validator = Validator::make($request->query(), [
+            'date' => 'required|date_format:Y-m-d',
+            'stores' => 'nullable',
+        ]);
+        abort_if($validator->fails(), 422, $validator->errors()->first());
+        $data = $validator->validated();
+
+        $numbers = $data['stores'] ?? [];
+        $numbers = array_values(array_filter(array_map('trim', is_array($numbers) ? $numbers : explode(',', (string) $numbers))));
+        $stores = $numbers === [] ? Store::pluck('store_number', 'id')->all() : $this->resolveStores($numbers);
+
+        $tz = ScreenUsageReport::WORK_DAY_TIMEZONE;
+        $date = $data['date'];
+        $rows = $report->workDays($stores, $date, $date);
+
+        $users = User::whereIn('id', array_unique(array_column($rows, 'user_id')))->get(['id', 'name', 'email'])->keyBy('id');
+        $hours = fn (float $seconds) => round($seconds / 3600, 2);
+
+        $managers = [];
+        foreach ($rows as $row) {
+            $id = $row['user_id'];
+            $m = &$managers[$id];
+            $m ??= ['user_id' => $id, 'name' => $users[$id]->name ?? $row['name'], 'email' => $users[$id]->email ?? null,
+                'present' => 0, 'talking' => 0, 'stations' => []];
+            $m['present'] += $row['present'];
+            $m['talking'] += $row['talking'];
+            $m['stations'][] = [
+                'store' => (string) $row['store'],
+                'station_id' => $row['station_id'],
+                'station' => $row['station'],
+                'present_hours' => $hours($row['present']),
+                'talking_hours' => $hours($row['talking']),
+            ];
+            unset($m);
+        }
+
+        $managers = array_map(function (array $m) use ($hours) {
+            usort($m['stations'], fn (array $a, array $b) => [$a['store'], $a['station']] <=> [$b['store'], $b['station']]);
+
+            return ['user_id' => $m['user_id'], 'name' => $m['name'], 'email' => $m['email'],
+                'present_hours' => $hours($m['present']), 'talking_hours' => $hours($m['talking']), 'stations' => $m['stations']];
+        }, array_values($managers));
+        usort($managers, fn (array $a, array $b) => strcasecmp($a['name'], $b['name']));
+
+        return response()->json([
+            'date' => $date,
+            'tz' => $tz,
+            'final' => $date <= ScreenUsageReport::latestFinalWorkDay($tz),
+            'managers' => $managers,
+        ]);
+    }
+
     /** As LC_PIZZA_DATA: the fiscal year starts on the Tuesday of the week holding Jan 1. */
     private function fiscalYearStart(int $year): CarbonImmutable
     {
@@ -409,11 +477,16 @@ class ScreenUsageReportController extends Controller
         $numbers = array_values(array_filter(array_map('trim', is_array($numbers) ? $numbers : explode(',', (string) $numbers))));
         $stores = $numbers === [] ? Store::pluck('store_number', 'id')->all() : $this->resolveStores($numbers);
 
-        $tz = $data['tz'] ?? self::EXPORT_TIMEZONE;
-        $from = Carbon::parse($data['start_date'], $tz)->startOfDay()->utc();
-        $to = Carbon::parse($data['end_date'], $tz)->addDay()->startOfDay()->utc();
-
-        $rows = $report->dailyRows($stores, $from, $to, $tz, $byStation);
+        // In the stores' clock the days are work days (stored ones read from the daily
+        // aggregate); in any other zone asked for, that zone's midnight-to-midnight days.
+        $tz = $data['tz'] ?? ScreenUsageReport::WORK_DAY_TIMEZONE;
+        if ($tz === ScreenUsageReport::WORK_DAY_TIMEZONE) {
+            $rows = $report->workDays($stores, $data['start_date'], $data['end_date'], $byStation);
+        } else {
+            $from = Carbon::parse($data['start_date'], $tz)->startOfDay()->utc();
+            $to = Carbon::parse($data['end_date'], $tz)->addDay()->startOfDay()->utc();
+            $rows = $report->dailyRows($stores, $from, $to, $tz, $byStation);
+        }
 
         return response()->streamDownload(function () use ($rows, $columns) {
             $out = fopen('php://output', 'w');
