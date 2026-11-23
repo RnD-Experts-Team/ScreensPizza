@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 class NatsConsumeCommand extends Command
 {
     protected $signature   = 'nats:consume';
-    protected $description = 'Consume Auth Service user events from NATS JetStream';
+    protected $description = 'Consume Auth Service user and store events from NATS JetStream';
 
     public function handle(JetStreamConsumer $consumer): int
     {
