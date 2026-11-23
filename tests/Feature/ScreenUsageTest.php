@@ -5,6 +5,7 @@ namespace Tests\Feature;
 use App\Models\ScreenUsageSegment;
 use App\Models\Station;
 use App\Models\Store;
+use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Http;
@@ -37,6 +38,10 @@ class ScreenUsageTest extends TestCase
                 'ext' => ['authorized' => true],
             ]),
         ]);
+
+        // Segments belong to replicated pizzasys users.
+        User::factory()->create(['id' => 42, 'name' => 'Maria Manager']);
+        User::factory()->create(['id' => 43, 'name' => 'Omar Manager']);
 
         $this->store = Store::create(['id' => 7, 'store_number' => '1001']);
         $this->station = Station::create([
@@ -308,7 +313,8 @@ class ScreenUsageTest extends TestCase
         ], Carbon::parse('2026-10-12 03:00:00', 'UTC'));
         $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 30, ['store_id' => 8, 'end_reason' => 'duplicate_identity']]]);
 
-        $rows = $this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12']);
+        // Another zone asked for: its own midnight-to-midnight days (Puerto Rico is UTC-4, as New York is in October).
+        $rows = $this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12', 'tz' => 'America/Puerto_Rico']);
 
         $this->assertSame(
             [['2026-10-11', '1001'], ['2026-10-12', '1001'], ['2026-10-12', '1002']],
@@ -317,6 +323,14 @@ class ScreenUsageTest extends TestCase
         $this->assertSame(['1', '1', '0', '0.25'], [$rows[0]['Connected hours'], $rows[0]['Present hours'], $rows[0]['Away hours'], $rows[0]['Talking hours']]);
         $this->assertSame(['1', '0', '1', '0.25'], [$rows[1]['Connected hours'], $rows[1]['Present hours'], $rows[1]['Away hours'], $rows[1]['Talking hours']]);
         $this->assertSame(['Maria Manager', '42', '0.5', '1', '1'], [$rows[2]['Manager'], $rows[2]['Manager ID'], $rows[2]['Connected hours'], $rows[2]['Visits'], $rows[2]['Kicks']]);
+
+        // The stores' clock: work days. 23:00-01:00 and 04:00-04:30 are one shift (a 3h break),
+        // so all of it is the 11th's, at both stores.
+        $rows = $this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12']);
+
+        $this->assertSame([['2026-10-11', '1001'], ['2026-10-11', '1002']], array_map(fn ($r) => [$r['Date'], $r['Store']], $rows));
+        $this->assertSame(['2', '1', '1', '0.5'], [$rows[0]['Connected hours'], $rows[0]['Present hours'], $rows[0]['Away hours'], $rows[0]['Talking hours']]);
+        $this->assertSame(['Maria Manager', '42', '0.5', '1', '1'], [$rows[1]['Manager'], $rows[1]['Manager ID'], $rows[1]['Connected hours'], $rows[1]['Visits'], $rows[1]['Kicks']]);
 
         $this->assertSame(['1002'], array_column($this->export(['start_date' => '2026-10-11', 'end_date' => '2026-10-12', 'stores' => '1002']), 'Store'));
     }
@@ -406,6 +420,108 @@ class ScreenUsageTest extends TestCase
 
         $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export/boots-on-the-ground?date=2026-10-12')->assertUnauthorized();
         $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/boots-on-the-ground?date=12-10-2026')->assertUnprocessable();
+    }
+
+    /**
+     * Three managers around the night of Mon 12 Oct 2026 (New York, UTC-4):
+     *  - Maria: 22:00-01:00 on the 11th; 20:00-02:00 on the 12th on the make line, 10 min talking;
+     *    09:00-10:00 on the 13th, 7h after the night ended, so a new shift.
+     *  - Omar: 23:00-23:30 on the make line, then 02:00-03:00 with no main tile: a 2.5h break, one shift.
+     *  - Zed: connected 08:00 on the 12th to 04:00 on the 13th: 16h on the 12th, the last 4h a new shift.
+     */
+    private function seedWorkDays(): void
+    {
+        User::factory()->create(['id' => 44, 'name' => 'Zed Long']);
+        $utc = fn (string $at) => Carbon::parse($at, 'UTC');
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 180, []], ['camera', 'visible', 0, 180, []], ['main', null, 0, 180, []]], $utc('2026-10-12 02:00'));
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 360, []], ['camera', 'visible', 0, 360, []], ['main', null, 0, 360, []],
+            ['mic', 'open', 0, 60, ['talking_seconds' => 600]],
+        ], $utc('2026-10-13 00:00'));
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 60, []], ['camera', 'visible', 0, 60, []], ['main', null, 0, 60, []]], $utc('2026-10-13 13:00'));
+        $this->seedSegments(43, 'Omar Manager', [['session', null, 0, 30, []], ['camera', 'visible', 0, 30, []], ['main', null, 0, 30, []]], $utc('2026-10-13 03:00'));
+        $this->seedSegments(43, 'Omar Manager', [['session', null, 0, 60, []], ['camera', 'visible', 0, 60, []]], $utc('2026-10-13 06:00'));
+        $this->seedSegments(44, 'Zed Long', [['session', null, 0, 1200, []], ['camera', 'visible', 0, 1200, []]], $utc('2026-10-12 12:00'));
+    }
+
+    private function daily(string $date): array
+    {
+        config(['services.x_secret_key' => 'excel-secret']);
+
+        return $this->withHeader('X-Secret-Key', 'excel-secret')->getJson('/api/usage/export/daily?date='.$date)->assertOk()->json();
+    }
+
+    /** [name, present, talking, [[station, present, talking], ...]] per manager, hours. */
+    private function summary(array $daily): array
+    {
+        return array_map(fn (array $m) => [$m['name'], $m['present_hours'], $m['talking_hours'],
+            array_map(fn (array $s) => [$s['station'], $s['present_hours'], $s['talking_hours']], $m['stations'])], $daily['managers']);
+    }
+
+    public function test_daily_counts_each_shift_whole_on_the_day_it_started(): void
+    {
+        $this->seedWorkDays();
+        $this->travelTo(Carbon::parse('2026-10-14 18:00', 'America/New_York'));
+
+        $day = $this->daily('2026-10-12');
+        $this->assertSame(['date' => '2026-10-12', 'tz' => 'America/New_York', 'final' => true], array_intersect_key($day, array_flip(['date', 'tz', 'final'])));
+        $this->assertEquals([
+            ['Maria Manager', 6, 0.17, [['Make line', 6, 0.17]]],
+            ['Omar Manager', 1.5, 0, [['Make line', 0.5, 0], ['No main tile', 1, 0]]],
+            ['Zed Long', 16, 0, [['No main tile', 16, 0]]],
+        ], $this->summary($day));
+        $this->assertSame([42, User::find(42)->email, '1001', $this->station->id], [
+            $day['managers'][0]['user_id'], $day['managers'][0]['email'], $day['managers'][0]['stations'][0]['store'], $day['managers'][0]['stations'][0]['station_id'],
+        ]);
+
+        $this->assertEquals([['Maria Manager', 3, 0, [['Make line', 3, 0]]]], $this->summary($this->daily('2026-10-11')));
+        $this->assertEquals([
+            ['Maria Manager', 1, 0, [['Make line', 1, 0]]],
+            ['Zed Long', 4, 0, [['No main tile', 4, 0]]],
+        ], $this->summary($this->daily('2026-10-13')));
+    }
+
+    public function test_daily_is_not_final_while_a_shift_of_the_day_may_still_run(): void
+    {
+        $this->seedWorkDays();
+
+        // A shift can start up to midnight and last 16h, so the 12th is final from 16:00 on the 13th.
+        $this->travelTo(Carbon::parse('2026-10-13 15:59', 'America/New_York'));
+        $this->assertFalse($this->daily('2026-10-12')['final']);
+        $this->travelTo(Carbon::parse('2026-10-13 16:00', 'America/New_York'));
+        $this->assertTrue($this->daily('2026-10-12')['final']);
+    }
+
+    public function test_the_aggregate_gives_the_same_numbers_and_replaces_the_segments_for_stored_days(): void
+    {
+        $this->seedWorkDays();
+        $this->travelTo(Carbon::parse('2026-10-14 18:00', 'America/New_York'));
+        $query = ['start_date' => '2026-10-11', 'end_date' => '2026-10-13'];
+        $live = [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations')];
+
+        // Never past the latest final day (the 13th), whatever is asked.
+        $this->artisan('usage:aggregate-daily', ['--start' => '2026-10-11', '--end' => '2026-10-20'])
+            ->expectsOutputToContain('not final yet')
+            ->assertSuccessful();
+        $this->assertSame(['2026-10-11', '2026-10-12', '2026-10-13'], \DB::table('screen_usage_aggregated_days')->orderBy('work_date')->pluck('work_date')->map(fn ($d) => substr($d, 0, 10))->all());
+
+        // Stored days are read from the aggregate alone.
+        ScreenUsageSegment::query()->delete();
+        $this->assertSame($live, [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations')]);
+
+        // Rebuilding a day replaces it.
+        $this->artisan('usage:aggregate-daily', ['--start' => '2026-10-12', '--end' => '2026-10-12'])->assertSuccessful();
+        $this->assertSame([], $this->daily('2026-10-12')['managers']);
+        $this->assertCount(2, $this->daily('2026-10-13')['managers']);
+    }
+
+    public function test_daily_needs_the_secret_and_a_date(): void
+    {
+        config(['services.x_secret_key' => 'excel-secret']);
+        $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export/daily?date=2026-10-12')->assertUnauthorized();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/daily')->assertUnprocessable();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/daily?date=12-10-2026')->assertUnprocessable();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->getJson('/api/usage/export/daily?date=2026-10-12&stores=nope')->assertNotFound();
     }
 
     public function test_export_needs_the_secret_and_valid_dates_but_no_range_cap(): void

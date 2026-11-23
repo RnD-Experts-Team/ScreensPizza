@@ -8,8 +8,8 @@ use Illuminate\Support\Facades\Http;
  * Stands in for pizzasys. This service has no local login: every request goes
  * through AuthTokenStoreScopeMiddleware, which POSTs the caller's token to the
  * auth server. Faking that one call exercises the real middleware chain rather
- * than bypassing it. Ported, in minimal form, from ToolboxPizza; this service
- * keeps no users table of its own, so there is no user row to create.
+ * than bypassing it. Ported, in minimal form, from ToolboxPizza. Users replicate
+ * from pizzasys over NATS, so a test that writes usage creates its user row.
  */
 trait FakesAuthServer
 {

@@ -3,9 +3,11 @@ namespace App\Services;
 
 use App\Models\ScreenUsageSegment;
 use App\Models\Station;
+use Carbon\CarbonImmutable;
 use DateTimeImmutable;
 use DateTimeZone;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Screen Project monitoring report: how managers used Screen Project across
@@ -27,6 +29,19 @@ class ScreenUsageReport
 {
     /** Only these kinds of seconds per manager are kept; see build(). */
     private const LISTS = ['session', 'pip', 'visible', 'no_face', 'covered', 'camera', 'mic', 'dead', 'talk_all'];
+
+    /** The durations and counts of a dailyRows() row, as stored in screen_usage_daily. */
+    public const METRICS = ['on_screen', 'present', 'away', 'no_face', 'covered', 'camera_off', 'mic_open',
+        'talking', 'silent', 'dead_mic', 'talk_all', 'pip', 'visits', 'kicks'];
+
+    /** Work days are counted in the stores' clock. */
+    public const WORK_DAY_TIMEZONE = 'America/New_York';
+
+    /** A new shift starts after this long without being connected... */
+    public const SHIFT_GAP = 4 * 3600;
+
+    /** ...and no shift runs longer than this: the rest starts the next one. */
+    public const SHIFT_MAX = 16 * 3600;
 
     /**
      * @param  array<int, string>  $stores  store id => store number
@@ -299,16 +314,20 @@ class ScreenUsageReport
      * to their row without $byStation. When two tiles claim the main tile at once, the one
      * that took it last wins.
      *
+     * With $workDay (see workDayRows()) only each manager's time inside their shifts is
+     * counted, and all of it goes to the work day's date instead of the local day.
+     *
      * @param  array<int, string>  $stores  store id => store number
      * @param  array<int>|null  $userIds  only these managers (null = all)
+     * @param  array{date: string, shifts: array<int, list<array{0:int,1:int}>>}|null  $workDay
      * @return list<array<string, int|float|string|null>>
      */
-    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false, ?array $userIds = null): array
+    public function dailyRows(array $stores, Carbon $from, Carbon $to, string $tz, bool $byStation = false, ?array $userIds = null, ?array $workDay = null): array
     {
         $fromTs = $from->getTimestamp();
         $toTs = $to->getTimestamp();
         $zone = new DateTimeZone($tz);
-        $day = fn (int $ts) => (new DateTimeImmutable('@'.$ts))->setTimezone($zone)->format('Y-m-d');
+        $day = fn (int $ts) => $workDay['date'] ?? (new DateTimeImmutable('@'.$ts))->setTimezone($zone)->format('Y-m-d');
 
         $groups = [];
         $query = ScreenUsageSegment::query()->toBase()
@@ -324,47 +343,55 @@ class ScreenUsageReport
             $end = Carbon::parse($s->ended_at, 'UTC')->getTimestamp();
             $a = max($start, $fromTs);
             $b = min($end, $toTs);
-            if ($b <= $a) {
+            // On a work day, only the parts inside the manager's shifts that started on it.
+            $pieces = $workDay === null || $b <= $a
+                ? [[$a, $b]]
+                : $this->subtract([[$a, $b]], $this->subtract([[$a, $b]], $workDay['shifts'][(int) $s->user_id] ?? []));
+            $pieces = array_filter($pieces, fn (array $p) => $p[1] > $p[0]);
+            if ($pieces === []) {
                 continue;
             }
-            $iv = [$a, $b];
             $g = &$groups[$s->user_id.'|'.$s->store_id];
             $g ??= ['user_id' => (int) $s->user_id, 'store_id' => (int) $s->store_id, 'name' => null,
                 'lists' => array_fill_keys(self::LISTS, []), 'tiles' => [], 'mic_spans' => [], 'kicks' => []];
             $g['name'] = $s->user_name ?: $g['name'];
 
-            switch ($s->kind) {
-                case 'session':
-                    $g['lists']['session'][] = $iv;
-                    if ($s->surface === 'pip') {
-                        $g['lists']['pip'][] = $iv;
-                    }
-                    if ($s->end_reason === 'duplicate_identity' && $end <= $toTs) {
-                        $g['kicks'][] = $end;
-                    }
-                    break;
-                case 'main':
-                    if ($byStation && $s->station_id !== null) {
-                        $g['tiles'][] = [$a, $b, (int) $s->station_id];
-                    }
-                    break;
-                case 'camera':
-                    $g['lists']['camera'][] = $iv;
-                    if (in_array($s->state, ['visible', 'no_face', 'covered'], true)) {
-                        $g['lists'][$s->state][] = $iv;
-                    }
-                    break;
-                case 'mic':
-                    $g['lists']['mic'][] = $iv;
-                    if ($s->state === 'dead') {
-                        $g['lists']['dead'][] = $iv;
-                    }
-                    // Talking seconds, pro-rated when only part of the segment is inside the range.
-                    $g['mic_spans'][] = [$a, $b, $end > $start ? $s->talking_seconds * (($b - $a) / ($end - $start)) : 0];
-                    break;
-                case 'talk_all':
-                    $g['lists']['talk_all'][] = $iv;
-                    break;
+            foreach ($pieces as [$a, $b]) {
+                $iv = [$a, $b];
+                switch ($s->kind) {
+                    case 'session':
+                        $g['lists']['session'][] = $iv;
+                        if ($s->surface === 'pip') {
+                            $g['lists']['pip'][] = $iv;
+                        }
+                        // A kick counts where the segment ends, if that is inside what is counted.
+                        if ($s->end_reason === 'duplicate_identity' && $end <= $b) {
+                            $g['kicks'][] = $end;
+                        }
+                        break;
+                    case 'main':
+                        if ($byStation && $s->station_id !== null) {
+                            $g['tiles'][] = [$a, $b, (int) $s->station_id];
+                        }
+                        break;
+                    case 'camera':
+                        $g['lists']['camera'][] = $iv;
+                        if (in_array($s->state, ['visible', 'no_face', 'covered'], true)) {
+                            $g['lists'][$s->state][] = $iv;
+                        }
+                        break;
+                    case 'mic':
+                        $g['lists']['mic'][] = $iv;
+                        if ($s->state === 'dead') {
+                            $g['lists']['dead'][] = $iv;
+                        }
+                        // Talking seconds, pro-rated when only part of the segment is inside the range.
+                        $g['mic_spans'][] = [$a, $b, $end > $start ? $s->talking_seconds * (($b - $a) / ($end - $start)) : 0];
+                        break;
+                    case 'talk_all':
+                        $g['lists']['talk_all'][] = $iv;
+                        break;
+                }
             }
             unset($g);
         }
@@ -403,13 +430,13 @@ class ScreenUsageReport
                 foreach ($sets as $metric => $ivs) {
                     $this->bucket($cut($part, $ivs), $zone, function (string $d, int $wd, int $h, int $sec) use (&$days, $part, $metric) {
                         $days[$d][$part][$metric] = ($days[$d][$part][$metric] ?? 0) + $sec;
-                    });
+                    }, $workDay['date'] ?? null);
                 }
                 foreach ($g['mic_spans'] as [$a, $b, $talk]) {
                     $len = $b - $a;
                     $this->bucket($cut($part, [[$a, $b]]), $zone, function (string $d, int $wd, int $h, int $sec) use (&$rawTalk, $part, $talk, $len) {
                         $rawTalk[$d][$part] = ($rawTalk[$d][$part] ?? 0) + $talk * ($sec / $len);
-                    });
+                    }, $workDay['date'] ?? null);
                 }
             }
             foreach ($sets['on_screen'] as [$a]) {
@@ -463,6 +490,157 @@ class ScreenUsageReport
         usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['station'], $x['name']] <=> [$y['date'], $y['store'], $y['station'], $y['name']]);
 
         return $rows;
+    }
+
+    /**
+     * dailyRows(..., byStation: true) for one work day: every manager's shifts that started on
+     * $date in the $tz clock, counted whole, the hours after midnight included. A shift is a
+     * manager's connected time (at any store) chained across breaks shorter than SHIFT_GAP,
+     * and no longer than SHIFT_MAX: the rest starts the next shift. Every row's date is $date.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @return list<array<string, int|float|string|null>>
+     */
+    public function workDayRows(array $stores, string $date, string $tz): array
+    {
+        $shifts = $this->shiftsStartingOn($date, $tz);
+        if ($shifts === []) {
+            return [];
+        }
+
+        $all = array_merge([], ...array_values($shifts));
+        $from = Carbon::createFromTimestamp(min(array_column($all, 0)), 'UTC');
+        $to = Carbon::createFromTimestamp(max(array_column($all, 1)), 'UTC');
+
+        return $this->dailyRows($stores, $from, $to, $tz, true, array_keys($shifts), ['date' => $date, 'shifts' => $shifts]);
+    }
+
+    /**
+     * Work-day rows, as dailyRows() gives them (date = work day), for $start..$end in the stores'
+     * clock: a day usage:aggregate-daily has stored is read from screen_usage_daily, any other is
+     * worked out from the segments (workDayRows()). Without $byStation each manager's station
+     * rows are added into one row per day and store, as dailyRows() without it.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @return list<array<string, int|float|string|null>>
+     */
+    public function workDays(array $stores, string $start, string $end, bool $byStation = true): array
+    {
+        $stored = DB::table('screen_usage_aggregated_days')->whereBetween('work_date', [$start, $end])
+            ->pluck('work_date')->map(fn ($d) => substr((string) $d, 0, 10))->flip()->all();
+
+        $rows = [];
+        if ($stored !== []) {
+            $query = DB::table('screen_usage_daily as d')
+                ->leftJoin('stations as s', 's.id', '=', 'd.station_id')
+                ->leftJoin('users as u', 'u.id', '=', 'd.user_id')
+                ->whereBetween('d.work_date', [$start, $end])
+                ->whereIn('d.store_id', array_keys($stores))
+                ->select(['d.*', 's.name as station_name', 'u.name as user_name']);
+            foreach ($query->cursor() as $r) {
+                $station = $r->station_id === null ? null : (int) $r->station_id;
+                $rows[] = [
+                    'date' => substr((string) $r->work_date, 0, 10),
+                    'store' => $stores[$r->store_id],
+                    'station_id' => $station,
+                    'station' => $station === null ? 'No main tile' : ($r->station_name ?? "#{$station}"),
+                    'user_id' => (int) $r->user_id,
+                    'name' => $r->user_name ?: "#{$r->user_id}",
+                    ...array_map(fn (string $m) => (int) $r->{$m}, array_combine(self::METRICS, self::METRICS)),
+                ];
+            }
+        }
+
+        for ($day = CarbonImmutable::parse($start); $day->toDateString() <= $end; $day = $day->addDay()) {
+            if (!isset($stored[$day->toDateString()])) {
+                array_push($rows, ...$this->workDayRows($stores, $day->toDateString(), self::WORK_DAY_TIMEZONE));
+            }
+        }
+
+        if (!$byStation) {
+            $merged = [];
+            foreach ($rows as $row) {
+                $m = &$merged[$row['date'].'|'.$row['store'].'|'.$row['user_id']];
+                if ($m === null) {
+                    $m = array_replace($row, ['station_id' => null, 'station' => null]);
+                } else {
+                    foreach (self::METRICS as $metric) {
+                        $m[$metric] += $row[$metric];
+                    }
+                }
+                unset($m);
+            }
+            $rows = array_values($merged);
+        }
+
+        usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['station'], $x['name']] <=> [$y['date'], $y['store'], $y['station'], $y['name']]);
+
+        return $rows;
+    }
+
+    /**
+     * The latest work day nobody can still be working: its last possible shift (starting just
+     * before midnight) is SHIFT_MAX long, so a day is final SHIFT_MAX after it ends.
+     */
+    public static function latestFinalWorkDay(string $tz): string
+    {
+        return Carbon::now($tz)->subSeconds(self::SHIFT_MAX)->subDay()->toDateString();
+    }
+
+    /**
+     * Each manager's shifts ([start, end] timestamps) that start on $date in the $tz clock.
+     * Two days of history before it are read, so a shift running into the day is seen from
+     * its start and never taken for a new one.
+     *
+     * @return array<int, list<array{0:int,1:int}>>  user id => shifts, in order
+     */
+    private function shiftsStartingOn(string $date, string $tz): array
+    {
+        $dayStart = Carbon::parse($date, $tz)->startOfDay()->getTimestamp();
+        $dayEnd = Carbon::parse($date, $tz)->addDay()->startOfDay()->getTimestamp();
+        $lo = $dayStart - 3 * self::SHIFT_MAX;
+        $hi = $dayEnd + self::SHIFT_MAX;
+
+        $sessions = [];
+        $query = ScreenUsageSegment::query()->toBase()
+            ->where('kind', 'session')
+            ->where('started_at', '<', Carbon::createFromTimestamp($hi, 'UTC'))
+            ->where('ended_at', '>', Carbon::createFromTimestamp($lo, 'UTC'))
+            ->select(['user_id', 'started_at', 'ended_at']);
+        foreach ($query->cursor() as $s) {
+            $a = max(Carbon::parse($s->started_at, 'UTC')->getTimestamp(), $lo);
+            $b = min(Carbon::parse($s->ended_at, 'UTC')->getTimestamp(), $hi);
+            if ($b > $a) {
+                $sessions[(int) $s->user_id][] = [$a, $b];
+            }
+        }
+
+        $out = [];
+        foreach ($sessions as $uid => $ivs) {
+            $shifts = [];
+            $shift = null;
+            foreach ($this->merge($ivs) as [$a, $b]) {
+                while ($a < $b) {
+                    if ($shift === null || $a - $shift[1] >= self::SHIFT_GAP || $a >= $shift[0] + self::SHIFT_MAX) {
+                        if ($shift !== null) {
+                            $shifts[] = $shift;
+                        }
+                        $shift = [$a, $a];
+                    }
+                    $cut = min($b, $shift[0] + self::SHIFT_MAX);
+                    $shift[1] = max($shift[1], $cut);
+                    $a = $cut;
+                }
+            }
+            $shifts[] = $shift;
+
+            $onDay = array_values(array_filter($shifts, fn (array $sh) => $sh[0] >= $dayStart && $sh[0] < $dayEnd));
+            if ($onDay !== []) {
+                $out[$uid] = $onDay;
+            }
+        }
+
+        return $out;
     }
 
     /**
@@ -578,8 +756,9 @@ class ScreenUsageReport
     /**
      * Splits intervals at the viewer's local hour boundaries and calls
      * $add(day 'Y-m-d', weekday 0=Mon..6=Sun, hour 0..23, seconds) per piece.
+     * A given $day replaces the local one (a work day's overnight hours).
      */
-    private function bucket(array $ivs, DateTimeZone $zone, callable $add): void
+    private function bucket(array $ivs, DateTimeZone $zone, callable $add, ?string $day = null): void
     {
         foreach ($ivs as [$a, $b]) {
             $cursor = $a;
@@ -591,7 +770,7 @@ class ScreenUsageReport
                     $next = $cursor + 3600; // DST edge: never stall
                 }
                 $end = min($b, $next);
-                $add($local->format('Y-m-d'), (int) $local->format('N') - 1, $hour, $end - $cursor);
+                $add($day ?? $local->format('Y-m-d'), (int) $local->format('N') - 1, $hour, $end - $cursor);
                 $cursor = $end;
             }
         }

@@ -48,6 +48,11 @@ class ReportDatasetQueryTest extends TestCase
             ['id' => 3, 'store_id' => 2, 'name' => 'Make line', 'room_name' => 'make-2', 'type' => 'standard', 'created_at' => $now, 'updated_at' => $now],
         ]);
 
+        DB::table('users')->insert([
+            ['id' => 42, 'name' => 'Maria Manager', 'email' => 'maria@example.com', 'created_at' => $now, 'updated_at' => $now],
+            ['id' => 77, 'name' => 'Omar Ortiz', 'email' => 'omar@example.com', 'created_at' => $now, 'updated_at' => $now],
+        ]);
+
         // store, station, user, name, kind, state, start, end
         foreach ([
             [1, 1, 42, 'Maria Manager', 'camera', 'visible', '2026-10-21 14:00:00', '2026-10-21 14:10:00'],

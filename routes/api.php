@@ -43,6 +43,9 @@ Route::get('/usage/export/stations', [ScreenUsageReportController::class, 'expor
 // The Boots on the Ground workbook as JSON: ?date=[&stores=a,b][&tz=], week/period/quarter/year
 // video and voice hours with their comparisons (LC_PIZZA_DATA's ranges) and the week's detail.
 Route::get('/usage/export/boots-on-the-ground', [ScreenUsageReportController::class, 'bootsOnTheGroundExport'])->middleware(['throttle:service-secret', 'auth.secret.key']);
+// One work day per manager: ?date=[&stores=a,b], name, email, present and talking hours in
+// total and per station. Shift-based in the stores' clock, so overnight hours count for the day the shift started.
+Route::get('/usage/export/daily', [ScreenUsageReportController::class, 'daily'])->middleware(['throttle:service-secret', 'auth.secret.key']);
 
 Route::prefix('{storeId}')->middleware(['throttle:api', 'auth.token.store'])
     ->group(function () {
