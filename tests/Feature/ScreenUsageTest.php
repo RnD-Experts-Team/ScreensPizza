@@ -360,6 +360,54 @@ class ScreenUsageTest extends TestCase
         }
     }
 
+    public function test_boots_on_the_ground_export_gives_fiscal_ranges_and_the_weeks_detail(): void
+    {
+        $landing = Station::create(['store_id' => 7, 'name' => 'Landing', 'room_name' => 'landing-1001', 'type' => Station::TYPE_STANDARD]);
+        // This week (Tue 10-06 .. Mon 10-12): Landing in the main tile 08:00-09:00, then nothing until 10:00.
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 120, []],
+            ['main', null, 0, 60, ['station_id' => $landing->id]],
+            ['camera', 'visible', 0, 120, []],
+            ['mic', 'open', 0, 60, ['talking_seconds' => 1800]],
+        ]);
+        // Last week's Monday, the same weekday as `date`: one present hour.
+        $this->seedSegments(42, 'Maria Manager', [
+            ['session', null, 0, 60, []],
+            ['camera', 'visible', 0, 60, []],
+        ], Carbon::parse('2026-10-05 08:00:00', 'UTC'));
+        config(['services.x_secret_key' => 'excel-secret']);
+
+        $res = $this->withHeader('X-Secret-Key', 'excel-secret')
+            ->get('/api/usage/export/boots-on-the-ground?date=2026-10-12&tz=UTC')
+            ->assertOk();
+
+        $res->assertJsonPath('filtering.fiscal_year', 2026)
+            ->assertJsonPath('filtering.week_number', 41)
+            ->assertJsonPath('filtering.week_start', '2026-10-06')
+            ->assertJsonPath('filtering.period_number', 11)
+            ->assertJsonPath('filtering.quarter_start', '2026-09-08')
+            ->assertJsonPath('filtering.year_start', '2025-12-30');
+        $store = $res->json('by_store.1001');
+        $this->assertEquals(['start' => '2026-10-06', 'end' => '2026-10-12', 'video_hours' => 2, 'voice_hours' => 0.5], $store['week']['current']);
+        $this->assertEquals(['start' => '2026-09-29', 'end' => '2026-10-05', 'video_hours' => 1, 'voice_hours' => 0], $store['week']['previous']);
+        $this->assertEquals(0, $store['week']['same_week_last_year']['video_hours']);
+        $this->assertEquals('2025-10-07', $store['week']['same_week_last_year']['start']);
+        $this->assertEquals(3, $store['quarter']['current']['video_hours']);
+        $this->assertEquals(3, $store['year']['current']['video_hours']);
+        $this->assertArrayNotHasKey('same_year_last_year', $store['year']);
+
+        $detail = $store['week_detail'];
+        $this->assertEquals(['video_hours' => 1, 'voice_hours' => 0.5], $detail['columns']['landing']);
+        $this->assertEquals(['video_hours' => 1, 'voice_hours' => 0], $detail['columns']['others']);
+        $this->assertEquals(['video_hours' => 0, 'voice_hours' => 0], $detail['columns']['making']);
+        $this->assertEquals(['Landing', 'No main tile'], array_keys($detail['stations']));
+        $this->assertCount(7, $detail['days']);
+        $this->assertEquals(['date' => '2026-10-12', 'video_hours' => 2, 'voice_hours' => 0.5], $detail['days'][6]);
+
+        $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export/boots-on-the-ground?date=2026-10-12')->assertUnauthorized();
+        $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/boots-on-the-ground?date=12-10-2026')->assertUnprocessable();
+    }
+
     public function test_export_needs_the_secret_and_valid_dates_but_no_range_cap(): void
     {
         config(['services.x_secret_key' => 'excel-secret']);
