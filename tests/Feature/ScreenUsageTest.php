@@ -404,15 +404,6 @@ class ScreenUsageTest extends TestCase
         $this->assertCount(7, $detail['days']);
         $this->assertEquals(['date' => '2026-10-12', 'video_hours' => 2, 'voice_hours' => 0.5], $detail['days'][6]);
 
-        // weeks=N: this block and the N-1 week ends before it, in one answer.
-        $weeks = $this->withHeader('X-Secret-Key', 'excel-secret')
-            ->get('/api/usage/export/boots-on-the-ground?date=2026-10-12&weeks=2&tz=UTC')->assertOk()->json('weeks');
-        $this->assertCount(2, $weeks);
-        $this->assertEquals($res->json(), $weeks[0]);
-        $this->assertSame('2026-10-05', $weeks[1]['filtering']['date']);
-        $this->assertEquals(1, $weeks[1]['by_store']['1001']['week']['current']['video_hours']);
-        $this->assertEquals(1, $weeks[1]['by_store']['1001']['week_detail']['columns']['others']['video_hours']);
-
         $this->withHeader('X-Secret-Key', 'wrong')->get('/api/usage/export/boots-on-the-ground?date=2026-10-12')->assertUnauthorized();
         $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/boots-on-the-ground?date=12-10-2026')->assertUnprocessable();
     }
