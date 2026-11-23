@@ -18,6 +18,11 @@ class EventRouter
             "{$prefix}.user.created" => \App\Services\EventConsume\Handlers\UserCreatedHandler::class,
             "{$prefix}.user.updated" => \App\Services\EventConsume\Handlers\UserUpdatedHandler::class,
             "{$prefix}.user.deleted" => \App\Services\EventConsume\Handlers\UserDeletedHandler::class,
+
+            // Store lifecycle. No store.updated: it only carries name, metadata and
+            // is_active, none of which are kept here (the store number never changes).
+            "{$prefix}.store.created" => \App\Services\EventConsume\Handlers\StoreCreatedHandler::class,
+            "{$prefix}.store.deleted" => \App\Services\EventConsume\Handlers\StoreDeletedHandler::class,
         ];
     }
 
