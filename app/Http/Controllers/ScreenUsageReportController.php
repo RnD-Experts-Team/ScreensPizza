@@ -6,6 +6,8 @@ use App\Models\Station;
 use App\Models\Store;
 use App\Services\ScreenUsageReport;
 use Illuminate\Http\Request;
+use Carbon\CarbonImmutable;
+use Carbon\CarbonInterface;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Validator;
 
@@ -225,6 +227,169 @@ class ScreenUsageReportController extends Controller
     public function exportStations(Request $request, ScreenUsageReport $report)
     {
         return $this->csv($request, $report, true, self::STATION_EXPORT_COLUMNS, 'screen-monitoring-stations');
+    }
+
+    /** The Boots on the Ground report's station columns => the stations each one adds up. */
+    private const BOOTS_COLUMNS = [
+        'landing' => ['Landing'],
+        'making' => ['Making'],
+        'boh' => ['BOH'],
+        'register_1' => ['Register'],
+        'register_2' => ['Register2'],
+        'others' => ['No main tile', 'Phone', 'Making - Sales', 'Inner Drive-Thru'],
+    ];
+
+    /**
+     * GET /usage/export/boots-on-the-ground?date=YYYY-MM-DD[&stores=a,b][&tz=]
+     *
+     * The Boots on the Ground workbook, ready to show: per store, video (present) and voice
+     * (talking) hours for the week, period, quarter and year up to `date`, each against the
+     * previous one and the same one last year, plus the week's detail by station and by day.
+     * The ranges are LC_PIZZA_DATA's /reports/phone-and-adjusted-sales ones: weeks start on
+     * Tuesday, the fiscal year on the Tuesday of the week holding Jan 1, periods are 4 weeks,
+     * quarters 3-3-3-4 periods, and a comparison covers as many days as the current range.
+     */
+    public function bootsOnTheGroundExport(Request $request, ScreenUsageReport $report)
+    {
+        $validator = Validator::make($request->query(), [
+            'date' => 'required|date_format:Y-m-d',
+            'stores' => 'nullable',
+            'tz' => 'nullable|timezone:all_with_bc',
+        ]);
+        abort_if($validator->fails(), 422, $validator->errors()->first());
+        $data = $validator->validated();
+
+        $numbers = $data['stores'] ?? [];
+        $numbers = array_values(array_filter(array_map('trim', is_array($numbers) ? $numbers : explode(',', (string) $numbers))));
+        $stores = $numbers === [] ? Store::pluck('store_number', 'id')->all() : $this->resolveStores($numbers);
+        $tz = $data['tz'] ?? self::EXPORT_TIMEZONE;
+
+        $day = CarbonImmutable::parse($data['date'])->startOfDay();
+        $weekStart = $day->startOfWeek(CarbonInterface::TUESDAY);
+        $fiscalYear = $this->fiscalYearOf($day);
+        $yearStart = $this->fiscalYearStart($fiscalYear);
+        $prevYearStart = $this->fiscalYearStart($fiscalYear - 1);
+        $weekIdx = intdiv((int) $yearStart->diffInDays($weekStart), 7);
+        $periodIdx = intdiv($weekIdx, 4);
+        $periodStart = $yearStart->addWeeks($periodIdx * 4);
+        $quarterStartIdx = $periodIdx < 3 ? 0 : ($periodIdx < 6 ? 3 : ($periodIdx < 9 ? 6 : 9));
+        $quarterStart = $yearStart->addWeeks($quarterStartIdx * 4);
+
+        // scope => [current start, previous start, last year's start, last year's key]
+        $scopes = [
+            'week' => [$weekStart, $weekStart->subWeeks(1), $weekStart->subWeeks(52), 'same_week_last_year'],
+            'period' => [$periodStart, $periodStart->subWeeks(4), $prevYearStart->addWeeks($periodIdx * 4), 'same_period_last_year'],
+            'quarter' => [$quarterStart, $quarterStart->subWeeks($quarterStartIdx === 0 ? 16 : 12), $prevYearStart->addWeeks($quarterStartIdx * 4), 'same_quarter_last_year'],
+            'year' => [$yearStart, $prevYearStart, null, null],
+        ];
+
+        // Every day from last fiscal year's start to `date`, read once: store => date => sums.
+        $from = Carbon::parse($prevYearStart->toDateString(), $tz)->startOfDay()->utc();
+        $to = Carbon::parse($day->toDateString(), $tz)->addDay()->startOfDay()->utc();
+        $daily = [];
+        $weekRows = [];
+        foreach ($report->dailyRows($stores, $from, $to, $tz, true) as $row) {
+            $store = (string) $row['store'];
+            $daily[$store][$row['date']]['video'] = ($daily[$store][$row['date']]['video'] ?? 0) + $row['present'];
+            $daily[$store][$row['date']]['voice'] = ($daily[$store][$row['date']]['voice'] ?? 0) + $row['talking'];
+            if ($row['date'] >= $weekStart->toDateString()) {
+                $weekRows[$store][] = $row;
+            }
+        }
+
+        $hours = fn (float $seconds) => round($seconds / 3600, 2);
+        $sum = function (string $store, CarbonImmutable $start, CarbonImmutable $end) use ($daily, $hours): array {
+            $video = $voice = 0;
+            foreach ($daily[$store] ?? [] as $date => $m) {
+                if ($date >= $start->toDateString() && $date <= $end->toDateString()) {
+                    $video += $m['video'] ?? 0;
+                    $voice += $m['voice'] ?? 0;
+                }
+            }
+
+            return ['start' => $start->toDateString(), 'end' => $end->toDateString(), 'video_hours' => $hours($video), 'voice_hours' => $hours($voice)];
+        };
+
+        $numbers = array_values($stores);
+        sort($numbers);
+        $byStore = [];
+        foreach ($numbers as $store) {
+            $store = (string) $store;
+            $out = [];
+            foreach ($scopes as $scope => [$start, $prevStart, $lastYearStart, $lastYearKey]) {
+                $days = (int) $start->diffInDays($day);
+                $out[$scope] = [
+                    'current' => $sum($store, $start, $day),
+                    'previous' => $sum($store, $prevStart, $prevStart->addDays($days)),
+                ];
+                if ($lastYearStart !== null) {
+                    $out[$scope][$lastYearKey] = $sum($store, $lastYearStart, $lastYearStart->addDays($days));
+                }
+            }
+
+            // The week's detail: the report's station columns, every station by name, and each day.
+            $columns = array_fill_keys(array_keys(self::BOOTS_COLUMNS), ['video' => 0, 'voice' => 0]);
+            $stations = [];
+            foreach ($weekRows[$store] ?? [] as $row) {
+                $name = (string) $row['station'];
+                $stations[$name]['video'] = ($stations[$name]['video'] ?? 0) + $row['present'];
+                $stations[$name]['voice'] = ($stations[$name]['voice'] ?? 0) + $row['talking'];
+                foreach (self::BOOTS_COLUMNS as $column => $names) {
+                    if (in_array($name, $names, true)) {
+                        $columns[$column]['video'] += $row['present'];
+                        $columns[$column]['voice'] += $row['talking'];
+                    }
+                }
+            }
+            ksort($stations);
+            $toHours = fn (array $m) => ['video_hours' => $hours($m['video'] ?? 0), 'voice_hours' => $hours($m['voice'] ?? 0)];
+            $weekDays = [];
+            for ($d = $weekStart; $d->lte($day); $d = $d->addDay()) {
+                $weekDays[] = ['date' => $d->toDateString(), ...$toHours($daily[$store][$d->toDateString()] ?? [])];
+            }
+
+            $out['week_detail'] = [
+                'overall' => ['video_hours' => $out['week']['current']['video_hours'], 'voice_hours' => $out['week']['current']['voice_hours']],
+                'columns' => array_map($toHours, $columns),
+                'stations' => array_map($toHours, $stations),
+                'days' => $weekDays,
+            ];
+            $byStore[$store] = $out;
+        }
+
+        return response()->json([
+            'filtering' => [
+                'date' => $day->toDateString(),
+                'tz' => $tz,
+                'fiscal_year' => $fiscalYear,
+                'week_number' => $weekIdx + 1,
+                'week_start' => $weekStart->toDateString(),
+                'period_number' => $periodIdx + 1,
+                'period_start' => $periodStart->toDateString(),
+                'quarter_number' => intdiv($quarterStartIdx, 3) + 1,
+                'quarter_start' => $quarterStart->toDateString(),
+                'year_start' => $yearStart->toDateString(),
+                'stores' => $numbers,
+                'store_count' => count($numbers),
+            ],
+            'by_store' => $byStore,
+        ]);
+    }
+
+    /** As LC_PIZZA_DATA: the fiscal year starts on the Tuesday of the week holding Jan 1. */
+    private function fiscalYearStart(int $year): CarbonImmutable
+    {
+        return CarbonImmutable::create($year, 1, 1)->startOfWeek(CarbonInterface::TUESDAY);
+    }
+
+    private function fiscalYearOf(CarbonImmutable $date): int
+    {
+        $y = $date->year;
+        if ($date->lt($this->fiscalYearStart($y))) {
+            return $y - 1;
+        }
+
+        return $date->gte($this->fiscalYearStart($y + 1)) ? $y + 1 : $y;
     }
 
     /** @param  array<string, string>  $columns  CSV header => dailyRows() key */

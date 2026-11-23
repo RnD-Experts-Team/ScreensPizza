@@ -40,6 +40,9 @@ Route::middleware(['throttle:api', 'auth.token.store'])->group(function () {
 // A shared secret (X-Secret-Key), not a user token: its own rate limit and no pizzasys auth rule.
 Route::get('/usage/export', [ScreenUsageReportController::class, 'export'])->middleware(['throttle:service-secret', 'auth.secret.key']);
 Route::get('/usage/export/stations', [ScreenUsageReportController::class, 'exportStations'])->middleware(['throttle:service-secret', 'auth.secret.key']);
+// The Boots on the Ground workbook as JSON: ?date=[&stores=a,b][&tz=], week/period/quarter/year
+// video and voice hours with their comparisons (LC_PIZZA_DATA's ranges) and the week's detail.
+Route::get('/usage/export/boots-on-the-ground', [ScreenUsageReportController::class, 'bootsOnTheGroundExport'])->middleware(['throttle:service-secret', 'auth.secret.key']);
 
 Route::prefix('{storeId}')->middleware(['throttle:api', 'auth.token.store'])
     ->group(function () {
