@@ -289,23 +289,30 @@ class ScreenUsageReportController extends Controller
             'year' => [$yearStart, $prevYearStart, null, null],
         ];
 
-        // Every day from last fiscal year's start to `date`, read once: store => date => sums.
-        // Work days in the stores' clock (stored ones from the daily aggregate), else that zone's days.
+        // store => date => sums, every day from last fiscal year's start to `date`, and the week's
+        // rows by station. Work days in the stores' clock: the totals summed by the database from
+        // the daily aggregate, the week's few rows read whole; another tz keeps that zone's days.
+        $daily = [];
+        $weekRows = [];
         if ($tz === ScreenUsageReport::WORK_DAY_TIMEZONE) {
-            $rows = $report->workDays($stores, $prevYearStart->toDateString(), $day->toDateString());
+            foreach ($report->workDayTotals($stores, $prevYearStart->toDateString(), $day->toDateString()) as $store => $dates) {
+                foreach ($dates as $date => $m) {
+                    $daily[(string) $store][$date] = ['video' => $m['present'], 'voice' => $m['talking']];
+                }
+            }
+            foreach ($report->workDays($stores, $weekStart->toDateString(), $day->toDateString()) as $row) {
+                $weekRows[(string) $row['store']][] = $row;
+            }
         } else {
             $from = Carbon::parse($prevYearStart->toDateString(), $tz)->startOfDay()->utc();
             $to = Carbon::parse($day->toDateString(), $tz)->addDay()->startOfDay()->utc();
-            $rows = $report->dailyRows($stores, $from, $to, $tz, true);
-        }
-        $daily = [];
-        $weekRows = [];
-        foreach ($rows as $row) {
-            $store = (string) $row['store'];
-            $daily[$store][$row['date']]['video'] = ($daily[$store][$row['date']]['video'] ?? 0) + $row['present'];
-            $daily[$store][$row['date']]['voice'] = ($daily[$store][$row['date']]['voice'] ?? 0) + $row['talking'];
-            if ($row['date'] >= $weekStart->toDateString()) {
-                $weekRows[$store][] = $row;
+            foreach ($report->dailyRows($stores, $from, $to, $tz, true) as $row) {
+                $store = (string) $row['store'];
+                $daily[$store][$row['date']]['video'] = ($daily[$store][$row['date']]['video'] ?? 0) + $row['present'];
+                $daily[$store][$row['date']]['voice'] = ($daily[$store][$row['date']]['voice'] ?? 0) + $row['talking'];
+                if ($row['date'] >= $weekStart->toDateString()) {
+                    $weekRows[$store][] = $row;
+                }
             }
         }
 

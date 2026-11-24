@@ -761,10 +761,8 @@ class ScreenUsageReport
             }
         }
 
-        for ($day = CarbonImmutable::parse($start); $day->toDateString() <= $end; $day = $day->addDay()) {
-            if (!isset($stored[$day->toDateString()])) {
-                array_push($rows, ...$this->workDayRows($stores, $day->toDateString(), self::WORK_DAY_TIMEZONE));
-            }
+        foreach ($this->unstoredDays($start, $end, $stored) as $date) {
+            array_push($rows, ...$this->workDayRows($stores, $date, self::WORK_DAY_TIMEZONE));
         }
 
         if (!$byStation) {
@@ -786,6 +784,68 @@ class ScreenUsageReport
         usort($rows, fn ($x, $y) => [$x['date'], $x['store'], $x['station'], $x['name']] <=> [$y['date'], $y['store'], $y['station'], $y['name']]);
 
         return $rows;
+    }
+
+    /**
+     * Present and talking seconds per store and work day for $start..$end, in the stores' clock:
+     * stored days summed by the database from screen_usage_daily, any other day worked out from
+     * the segments. For long ranges (a year and more), where reading every row would be too slow.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @return array<string, array<string, array{present:int|float, talking:int|float}>>  store number => date => sums
+     */
+    public function workDayTotals(array $stores, string $start, string $end): array
+    {
+        $stored = $this->storedDays($start, $end);
+
+        $out = [];
+        if ($stored !== []) {
+            $query = DB::table('screen_usage_daily')
+                ->whereBetween('work_date', [$start, $end])
+                ->whereIn('store_id', array_keys($stores))
+                ->groupBy('store_id', 'work_date')
+                ->selectRaw('store_id, work_date, SUM(present) as present, SUM(talking) as talking');
+            foreach ($query->get() as $r) {
+                $out[$stores[$r->store_id]][substr((string) $r->work_date, 0, 10)] = ['present' => (int) $r->present, 'talking' => (int) $r->talking];
+            }
+        }
+
+        foreach ($this->unstoredDays($start, $end, $stored) as $date) {
+            foreach ($this->workDayRows($stores, $date, self::WORK_DAY_TIMEZONE) as $row) {
+                $m = &$out[$row['store']][$date];
+                $m['present'] = ($m['present'] ?? 0) + $row['present'];
+                $m['talking'] = ($m['talking'] ?? 0) + $row['talking'];
+                unset($m);
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * The work days in $start..$end that are not stored and can hold a shift: none before the
+     * day of the first recorded segment, so a long range costs nothing for the time before it.
+     *
+     * @param  array<string, int>  $stored  storedDays()
+     * @return list<string>
+     */
+    private function unstoredDays(string $start, string $end, array $stored): array
+    {
+        $first = ScreenUsageSegment::query()->min('started_at');
+        if ($first === null) {
+            return [];
+        }
+        // A day earlier: a shift that started before midnight UTC may belong to the day before.
+        $firstDay = Carbon::parse($first, 'UTC')->setTimezone(self::WORK_DAY_TIMEZONE)->subDay()->toDateString();
+
+        $days = [];
+        for ($day = CarbonImmutable::parse(max($start, $firstDay)); $day->toDateString() <= $end; $day = $day->addDay()) {
+            if (!isset($stored[$day->toDateString()])) {
+                $days[] = $day->toDateString();
+            }
+        }
+
+        return $days;
     }
 
     /**

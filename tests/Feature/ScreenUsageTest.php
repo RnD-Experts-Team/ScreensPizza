@@ -502,6 +502,8 @@ class ScreenUsageTest extends TestCase
             $this->getReport($range)->assertOk()->json(),
             $this->getReport($range + ['users' => [43]])->assertOk()->json(),
             $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?'.http_build_query($range))->assertOk()->json(),
+            // The workbook's export: its year of totals summed by the database from stored days.
+            $this->withHeader('X-Secret-Key', 'excel-secret')->get('/api/usage/export/boots-on-the-ground?date=2026-10-13')->assertOk()->json(),
         ];
         $live = [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations'), ...$monitoring()];
 
