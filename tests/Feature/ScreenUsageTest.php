@@ -219,9 +219,9 @@ class ScreenUsageTest extends TestCase
         $this->assertSame([5400, 3600, 600], [$screen['connected'], $screen['present'], $screen['talking']]);
     }
 
-    public function test_report_counts_days_in_the_viewers_time_zone_and_filters_managers(): void
+    public function test_report_counts_work_days_and_filters_managers(): void
     {
-        // 03:00-05:00 UTC is 23:00-01:00 in New York (UTC-4): it straddles two local days.
+        // 03:00-05:00 UTC is 23:00-01:00 in New York (UTC-4): one shift, so all of it is the 11th's.
         $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 120, []]], Carbon::parse('2026-10-12 03:00:00', 'UTC'));
         $this->seedSegments(43, 'Omar Manager', [['session', null, 0, 60, []]]);
 
@@ -229,7 +229,7 @@ class ScreenUsageTest extends TestCase
             'from' => '2026-10-11T04:00:00Z', 'to' => '2026-10-13T04:00:00Z', 'tz' => 'America/New_York', 'users' => [42],
         ])->assertOk()->json();
 
-        $this->assertSame([['2026-10-11', 3600], ['2026-10-12', 3600]], array_map(fn ($d) => [$d['date'], $d['on_screen']], $r['days']));
+        $this->assertSame([['2026-10-11', 7200]], array_map(fn ($d) => [$d['date'], $d['on_screen']], $r['days']));
         $this->assertCount(1, $r['users']);
         $this->assertCount(2, $r['managers'], 'the filter list ignores the filter');
     }
@@ -497,7 +497,13 @@ class ScreenUsageTest extends TestCase
         $this->seedWorkDays();
         $this->travelTo(Carbon::parse('2026-10-14 18:00', 'America/New_York'));
         $query = ['start_date' => '2026-10-11', 'end_date' => '2026-10-13'];
-        $live = [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations')];
+        $range = ['stores' => ['1001'], 'from' => '2026-10-11T04:00:00Z', 'to' => '2026-10-14T04:00:00Z', 'tz' => 'America/New_York'];
+        $monitoring = fn () => [
+            $this->getReport($range)->assertOk()->json(),
+            $this->getReport($range + ['users' => [43]])->assertOk()->json(),
+            $this->withToken('user-token')->getJson('/api/usage/boots-on-the-ground?'.http_build_query($range))->assertOk()->json(),
+        ];
+        $live = [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations'), ...$monitoring()];
 
         // Never past the latest final day (the 13th), whatever is asked.
         $this->artisan('usage:aggregate-daily', ['--start' => '2026-10-11', '--end' => '2026-10-20'])
@@ -505,14 +511,35 @@ class ScreenUsageTest extends TestCase
             ->assertSuccessful();
         $this->assertSame(['2026-10-11', '2026-10-12', '2026-10-13'], \DB::table('screen_usage_aggregated_days')->orderBy('work_date')->pluck('work_date')->map(fn ($d) => substr($d, 0, 10))->all());
 
-        // Stored days are read from the aggregate alone.
+        // Stored days are read from the aggregate alone: the exports, the monitoring report (whole
+        // and for one manager) and the dashboards' Boots on the Ground give the same answers.
         ScreenUsageSegment::query()->delete();
-        $this->assertSame($live, [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations')]);
+        $this->assertEquals($live, [$this->daily('2026-10-12'), $this->export($query), $this->export($query, '/api/usage/export/stations'), ...$monitoring()]);
+        $this->assertSame(['Maria Manager', 'Omar Manager', 'Zed Long'], array_column($live[3]['managers'], 'name'));
+        $this->assertSame([43], array_column($live[4]['users'], 'user_id'));
 
         // Rebuilding a day replaces it.
         $this->artisan('usage:aggregate-daily', ['--start' => '2026-10-12', '--end' => '2026-10-12'])->assertSuccessful();
         $this->assertSame([], $this->daily('2026-10-12')['managers']);
         $this->assertCount(2, $this->daily('2026-10-13')['managers']);
+    }
+
+    public function test_a_stored_managers_day_at_stores_outside_the_filter_is_read_from_the_segments(): void
+    {
+        // Maria at both stores at once, 08:00-10:00 at 1001 and 09:00-11:00 at 1002.
+        Store::create(['id' => 8, 'store_number' => '1002']);
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 0, 120, []], ['camera', 'visible', 0, 120, []]]);
+        $this->seedSegments(42, 'Maria Manager', [['session', null, 60, 180, ['store_id' => 8]], ['camera', 'visible', 60, 180, ['store_id' => 8]]]);
+        $this->travelTo(Carbon::parse('2026-10-14 18:00', 'America/New_York'));
+        $range = fn (array $stores) => ['stores' => $stores, 'from' => '2026-10-12T04:00:00Z', 'to' => '2026-10-13T04:00:00Z', 'tz' => 'America/New_York'];
+
+        $live = [$this->getReport($range(['1001']))->json(), $this->getReport($range(['1001', '1002']))->json()];
+        $this->artisan('usage:aggregate-daily', ['--start' => '2026-10-12'])->assertSuccessful();
+        $stored = [$this->getReport($range(['1001']))->json(), $this->getReport($range(['1001', '1002']))->json()];
+
+        $this->assertEquals($live, $stored);
+        // Merged across both stores: 3h, not 2h + 2h; at 1001 alone, 2h.
+        $this->assertSame([7200, 10800], [$stored[0]['users'][0]['on_screen'], $stored[1]['users'][0]['on_screen']]);
     }
 
     public function test_daily_needs_the_secret_and_a_date(): void

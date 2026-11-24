@@ -14,7 +14,7 @@ class AggregateDailyUsageCommand extends Command
                             {--start= : First work day (Y-m-d); default six days before --end}
                             {--end= : Last work day (Y-m-d); default the latest final one}';
 
-    protected $description = 'Rebuild screen_usage_daily for final work days, from the segments';
+    protected $description = 'Rebuild screen_usage_daily and screen_usage_daily_users for final work days, from the segments';
 
     public function handle(ScreenUsageReport $report): int
     {
@@ -45,17 +45,26 @@ class AggregateDailyUsageCommand extends Command
                 'updated_at' => $now,
             ], $report->workDayRows($stores, $date, $tz));
 
-            DB::transaction(function () use ($date, $rows, $now) {
+            $users = [];
+            foreach ($report->collectWorkDay($stores, $date) as $userId => $stats) {
+                $users[] = ['work_date' => $date, 'user_id' => $userId, 'stats' => json_encode($stats), 'created_at' => $now, 'updated_at' => $now];
+            }
+
+            DB::transaction(function () use ($date, $rows, $users, $now) {
                 DB::table('screen_usage_daily')->where('work_date', $date)->delete();
                 foreach (array_chunk($rows, 500) as $chunk) {
                     DB::table('screen_usage_daily')->insert($chunk);
+                }
+                DB::table('screen_usage_daily_users')->where('work_date', $date)->delete();
+                foreach (array_chunk($users, 500) as $chunk) {
+                    DB::table('screen_usage_daily_users')->insert($chunk);
                 }
                 DB::table('screen_usage_aggregated_days')->upsert(
                     [['work_date' => $date, 'created_at' => $now, 'updated_at' => $now]], ['work_date'], ['updated_at'],
                 );
             });
 
-            $this->line("{$date}: ".count($rows).' rows');
+            $this->line("{$date}: ".count($rows).' rows, '.count($users).' managers');
         }
 
         return self::SUCCESS;

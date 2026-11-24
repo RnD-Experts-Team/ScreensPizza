@@ -105,13 +105,19 @@ class ScreenUsageReportController extends Controller
         $from = Carbon::parse($data['from'])->utc();
         $to = Carbon::parse($data['to'])->utc();
 
-        $result = $report->build($stores, $from, $to, $data['users'] ?? null, $data['tz'] ?? 'UTC');
+        $tz = $data['tz'] ?? 'UTC';
+        // Query-string ids arrive as strings.
+        $userIds = isset($data['users']) ? array_map('intval', $data['users']) : null;
+
+        // Work days, stored ones read from the daily aggregate (see build()); its `managers` is
+        // everyone seen in these stores and days, for the manager filter (which it ignores).
+        $result = $report->build($stores, $from, $to, $userIds, $tz);
 
         // Each screen's own connected / present / talking time: a manager's time goes to the
         // screen in their main tile at that moment, as in the per-station export.
         $byStation = [];
-        foreach ($report->dailyRows($stores, $from, $to, $data['tz'] ?? 'UTC', true, $data['users'] ?? null) as $row) {
-            if ($row['station_id'] === null) {
+        foreach ($this->workDayRows($report, $stores, $from, $to, $tz) as $row) {
+            if ($row['station_id'] === null || ($userIds && !in_array($row['user_id'], $userIds, true))) {
                 continue;
             }
             foreach (['connected' => 'on_screen', 'present' => 'present', 'talking' => 'talking'] as $key => $column) {
@@ -124,19 +130,20 @@ class ScreenUsageReportController extends Controller
             'talking' => (int) round($byStation[$screen['station_id']]['talking'] ?? 0),
         ], $result['screens']);
 
-        // Everyone seen in these stores and dates, for the manager filter (ignores the filter itself).
-        $result['managers'] = ScreenUsageSegment::query()
-            ->whereIn('store_id', array_keys($stores))
-            ->where('started_at', '<', $to)
-            ->where('ended_at', '>', $from)
-            ->groupBy('user_id')
-            ->selectRaw('user_id, MAX(user_name) as name')
-            ->orderBy('name')
-            ->get()
-            ->map(fn ($m) => ['user_id' => (int) $m->user_id, 'name' => $m->name ?: "#{$m->user_id}"])
-            ->values();
-
         return response()->json($result);
+    }
+
+    /**
+     * ScreenUsageReport::workDays() rows for the work days a [from, to) range covers in the
+     * viewer's clock (ScreenUsageReport::workDates()).
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     */
+    private function workDayRows(ScreenUsageReport $report, array $stores, Carbon $from, Carbon $to, string $tz): array
+    {
+        $dates = ScreenUsageReport::workDates($from, $to, $tz);
+
+        return $dates === null ? [] : $report->workDays($stores, $dates[0], $dates[1]);
     }
 
     /**
@@ -145,7 +152,8 @@ class ScreenUsageReportController extends Controller
      * per station (the station in their main tile at that moment). Only what those cards show, and
      * read with the stores' report permission, not `screens manager`: every manager at a store sees
      * the store's managers, themselves and their partners. Every standard station is listed, so a
-     * station nobody watched shows as zero. Seconds; days in `tz`.
+     * station nobody watched shows as zero. Seconds; the work days the range covers in `tz`,
+     * stored ones read from the daily aggregate.
      */
     public function bootsOnTheGround(Request $request, ScreenUsageReport $report)
     {
@@ -165,7 +173,7 @@ class ScreenUsageReportController extends Controller
         $zero = ['connected' => 0, 'present' => 0, 'talking' => 0];
         $totals = $zero;
         $managers = [];
-        foreach ($report->dailyRows($stores, $from, $to, $data['tz'] ?? 'UTC', true) as $row) {
+        foreach ($this->workDayRows($report, $stores, $from, $to, $data['tz'] ?? 'UTC') as $row) {
             $id = (int) $row['user_id'];
             $managers[$id] ??= ['user_id' => $id, 'name' => $row['name'], 'stores' => [], ...$zero, 'stations' => []];
             $managers[$id]['stores'][$row['store']] = true;
