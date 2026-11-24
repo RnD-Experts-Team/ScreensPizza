@@ -44,27 +44,135 @@ class ScreenUsageReport
     public const SHIFT_MAX = 16 * 3600;
 
     /**
+     * The monitoring report over the work days of [from, to): every work day whose date, in the
+     * viewer's clock ($tz), the range touches, each counted whole (see workDayRows()). A day
+     * usage:aggregate-daily has stored is read from screen_usage_daily_users; any other day, and
+     * on a stored day a manager who also worked at stores outside $stores, is worked out from the
+     * segments. Weekday × hour are in $tz; `managers` is everyone seen, whatever $userIds says.
+     *
      * @param  array<int, string>  $stores  store id => store number
      * @param  array<int>|null  $userIds  only these managers (null = all)
      */
     public function build(array $stores, Carbon $from, Carbon $to, ?array $userIds, string $tz): array
     {
+        $partials = [];
+        $dates = self::workDates($from, $to, $tz);
+        if ($dates !== null) {
+            [$first, $last] = $dates;
+            $stored = $this->storedDays($first, $last);
+
+            // A stored manager-day counts as stored only when all its stores are asked for: a
+            // manager's time is merged across their stores, and that merge cannot be undone.
+            $fallback = [];
+            if ($stored !== []) {
+                $rows = DB::table('screen_usage_daily_users')
+                    ->whereBetween('work_date', [$first, $last])
+                    ->select(['work_date', 'user_id', 'stats'])
+                    ->cursor();
+                foreach ($rows as $r) {
+                    $date = substr((string) $r->work_date, 0, 10);
+                    $p = json_decode($r->stats, true);
+                    $outside = array_diff($p['stores'], array_keys($stores));
+                    if (count($outside) === count($p['stores'])) {
+                        continue;
+                    }
+                    if ($outside === []) {
+                        $partials[] = [$date, (int) $r->user_id, $p];
+                    } else {
+                        $fallback[$date][] = (int) $r->user_id;
+                    }
+                }
+            }
+
+            for ($day = CarbonImmutable::parse($first); $day->toDateString() <= $last; $day = $day->addDay()) {
+                $date = $day->toDateString();
+                if (isset($stored[$date]) && !isset($fallback[$date])) {
+                    continue;
+                }
+                foreach ($this->collectWorkDay($stores, $date, isset($stored[$date]) ? $fallback[$date] : null) as $uid => $p) {
+                    $partials[] = [$date, $uid, $p];
+                }
+            }
+        }
+
+        // One order whichever way each day was read, so ties come out the same.
+        usort($partials, fn (array $x, array $y) => [$x[0], $x[1]] <=> [$y[0], $y[1]]);
+
+        return ['range' => ['from' => $from->toIso8601String(), 'to' => $to->toIso8601String(), 'tz' => $tz]]
+            + $this->finalize($stores, $partials, $userIds, $tz);
+    }
+
+    /**
+     * The work days a range covers: from the date of $from to the date of its last second, both
+     * in the viewer's clock. Null for an empty range.
+     *
+     * @return array{0: string, 1: string}|null
+     */
+    public static function workDates(Carbon $from, Carbon $to, string $tz): ?array
+    {
+        if ($to->lte($from)) {
+            return null;
+        }
+
+        return [$from->copy()->setTimezone($tz)->toDateString(), $to->copy()->subSecond()->setTimezone($tz)->toDateString()];
+    }
+
+    /** @return array<string, int> the stored work days in $start..$end, as keys */
+    private function storedDays(string $start, string $end): array
+    {
+        return DB::table('screen_usage_aggregated_days')->whereBetween('work_date', [$start, $end])
+            ->pluck('work_date')->map(fn ($d) => substr((string) $d, 0, 10))->flip()->all();
+    }
+
+    /**
+     * collect() for one work day: each manager's shifts that started on $date, whole.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @param  array<int>|null  $userIds  only these managers (null = all)
+     * @return array<int, array<string, mixed>> user id => their numbers
+     */
+    public function collectWorkDay(array $stores, string $date, ?array $userIds = null): array
+    {
+        $shifts = $this->shiftsStartingOn($date, self::WORK_DAY_TIMEZONE);
+        if ($userIds !== null) {
+            $shifts = array_intersect_key($shifts, array_flip($userIds));
+        }
+        if ($shifts === []) {
+            return [];
+        }
+
+        $all = array_merge([], ...array_values($shifts));
+
+        return $this->collect(
+            $stores,
+            Carbon::createFromTimestamp(min(array_column($all, 0)), 'UTC'),
+            Carbon::createFromTimestamp(max(array_column($all, 1)), 'UTC'),
+            ['date' => $date, 'shifts' => $shifts],
+        );
+    }
+
+    /**
+     * Each manager's numbers for one work day, the way the report counts them: their segments
+     * inside their shifts, merged across the stores asked for so nothing is counted twice, then
+     * every figure in seconds. Presence is also kept by UTC hour ('Y-m-d H') for the weekday ×
+     * hour grid, so it can be read in any viewer's clock.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @param  array{date: string, shifts: array<int, list<array{0:int,1:int}>>}  $workDay
+     * @return array<int, array<string, mixed>> user id => their numbers
+     */
+    private function collect(array $stores, Carbon $from, Carbon $to, array $workDay): array
+    {
         $fromTs = $from->getTimestamp();
         $toTs = $to->getTimestamp();
-        $zone = new DateTimeZone($tz);
-
-        $stations = Station::whereIn('store_id', array_keys($stores))
-            ->where('type', Station::TYPE_STANDARD)
-            ->orderBy('store_id')->orderBy('name')
-            ->get(['id', 'store_id', 'name'])
-            ->keyBy('id');
+        $utc = new DateTimeZone('UTC');
 
         $users = [];
         $query = ScreenUsageSegment::query()->toBase()
             ->whereIn('store_id', array_keys($stores))
+            ->whereIn('user_id', array_keys($workDay['shifts']))
             ->where('started_at', '<', $to)
             ->where('ended_at', '>', $from)
-            ->when($userIds, fn ($q) => $q->whereIn('user_id', $userIds))
             ->orderBy('started_at')
             ->select(['user_id', 'user_name', 'store_id', 'station_id', 'kind', 'state', 'surface', 'started_at', 'ended_at', 'talking_seconds', 'end_reason']);
 
@@ -73,97 +181,240 @@ class ScreenUsageReport
             $end = Carbon::parse($s->ended_at, 'UTC')->getTimestamp();
             $a = max($start, $fromTs);
             $b = min($end, $toTs);
-            if ($b <= $a) {
+            $uid = (int) $s->user_id;
+            $pieces = $b <= $a ? [] : array_filter(
+                $this->subtract([[$a, $b]], $this->subtract([[$a, $b]], $workDay['shifts'][$uid] ?? [])),
+                fn (array $p) => $p[1] > $p[0],
+            );
+            if ($pieces === []) {
                 continue;
             }
-            $iv = [$a, $b];
-            $uid = (int) $s->user_id;
+
             $u = &$users[$uid];
             if ($u === null) {
                 $u = ['name' => null, 'stores' => [], 'last_seen' => 0, 'kicks' => 0, 'talking' => 0.0, 'talk_all_talking' => 0.0,
-                    'lists' => array_fill_keys(self::LISTS, []), 'by_store' => [], 'main' => [], 'station_mic' => [], 'station_cam' => [], 'mic_spans' => []];
+                    'lists' => array_fill_keys(self::LISTS, []), 'by_store' => [], 'main' => [], 'station_mic' => [], 'station_cam' => []];
             }
             $u['name'] = $s->user_name ?: $u['name'];
             $storeId = (int) $s->store_id;
-            $u['stores'][$storeId] = true;
-            $u['last_seen'] = max($u['last_seen'], $b);
             $station = $s->station_id !== null ? (int) $s->station_id : null;
-            // Talking seconds, pro-rated when only part of the segment is inside the range.
-            $talk = $end > $start ? $s->talking_seconds * (($b - $a) / ($end - $start)) : 0;
 
-            switch ($s->kind) {
-                case 'session':
-                    $u['lists']['session'][] = $iv;
-                    $u['by_store'][$storeId]['session'][] = $iv;
-                    if ($s->surface === 'pip') {
-                        $u['lists']['pip'][] = $iv;
-                    }
-                    if ($s->end_reason === 'duplicate_identity' && $end <= $toTs) {
-                        $u['kicks']++;
-                        $u['by_store'][$storeId]['kicks'] = ($u['by_store'][$storeId]['kicks'] ?? 0) + 1;
-                    }
-                    break;
-                case 'main':
-                    if ($station !== null) {
-                        $u['main'][$station][] = $iv;
-                    }
-                    break;
-                case 'camera':
-                    $u['lists']['camera'][] = $iv;
-                    if (in_array($s->state, ['visible', 'no_face', 'covered'], true)) {
-                        $u['lists'][$s->state][] = $iv;
-                    }
-                    if ($s->state === 'visible') {
-                        $u['by_store'][$storeId]['visible'][] = $iv;
-                    }
-                    if ($station !== null) {
-                        $u['station_cam'][$station][] = $iv;
-                    }
-                    break;
-                case 'mic':
-                    $u['lists']['mic'][] = $iv;
-                    if ($s->state === 'dead') {
-                        $u['lists']['dead'][] = $iv;
-                    }
-                    $u['talking'] += $talk;
-                    $u['mic_spans'][] = [$a, $b, $talk];
-                    $u['by_store'][$storeId]['talking'] = ($u['by_store'][$storeId]['talking'] ?? 0) + $talk;
-                    if ($station !== null) {
-                        $u['station_mic'][$station][] = $iv;
-                    }
-                    break;
-                case 'talk_all':
-                    $u['lists']['talk_all'][] = $iv;
-                    $u['talk_all_talking'] += $talk;
-                    break;
+            foreach ($pieces as [$a, $b]) {
+                $iv = [$a, $b];
+                $u['stores'][$storeId] = true;
+                $u['last_seen'] = max($u['last_seen'], $b);
+                // Talking seconds, pro-rated when only part of the segment is counted.
+                $talk = $end > $start ? $s->talking_seconds * (($b - $a) / ($end - $start)) : 0;
+
+                switch ($s->kind) {
+                    case 'session':
+                        $u['lists']['session'][] = $iv;
+                        $u['by_store'][$storeId]['session'][] = $iv;
+                        if ($s->surface === 'pip') {
+                            $u['lists']['pip'][] = $iv;
+                        }
+                        if ($s->end_reason === 'duplicate_identity' && $end <= $b) {
+                            $u['kicks']++;
+                            $u['by_store'][$storeId]['kicks'] = ($u['by_store'][$storeId]['kicks'] ?? 0) + 1;
+                        }
+                        break;
+                    case 'main':
+                        if ($station !== null) {
+                            $u['main'][$station][] = $iv;
+                        }
+                        break;
+                    case 'camera':
+                        $u['lists']['camera'][] = $iv;
+                        if (in_array($s->state, ['visible', 'no_face', 'covered'], true)) {
+                            $u['lists'][$s->state][] = $iv;
+                        }
+                        if ($s->state === 'visible') {
+                            $u['by_store'][$storeId]['visible'][] = $iv;
+                        }
+                        if ($station !== null) {
+                            $u['station_cam'][$station][] = $iv;
+                        }
+                        break;
+                    case 'mic':
+                        $u['lists']['mic'][] = $iv;
+                        if ($s->state === 'dead') {
+                            $u['lists']['dead'][] = $iv;
+                        }
+                        $u['talking'] += $talk;
+                        $u['by_store'][$storeId]['talking'] = ($u['by_store'][$storeId]['talking'] ?? 0) + $talk;
+                        if ($station !== null) {
+                            $u['station_mic'][$station][] = $iv;
+                        }
+                        break;
+                    case 'talk_all':
+                        $u['lists']['talk_all'][] = $iv;
+                        $u['talk_all_talking'] += $talk;
+                        break;
+                }
             }
             unset($u);
         }
 
-        $days = [];
-        $hours = ['present' => array_fill(0, 7, array_fill(0, 24, 0)), 'away' => array_fill(0, 7, array_fill(0, 24, 0))];
-        $camera = ['present' => 0, 'no_face' => 0, 'covered' => 0, 'off' => 0];
-        $mic = ['talking' => 0, 'silent' => 0, 'dead' => 0, 'off' => 0];
-        $storeRows = [];
-        $stationRows = [];
-        $userRows = [];
-
+        $out = [];
         foreach ($users as $uid => $u) {
             $sets = $this->derive($u['lists']);
-            $onScreen = $sets['on_screen'];
-            $present = $sets['present'];
-            $away = $sets['away'];
-
             $t = fn (array $ivs) => $this->total($ivs);
+            $perStation = fn (array $byStation) => array_map(fn (array $ivs) => $t($this->merge($ivs)), $byStation);
             $micOpen = $t($sets['mic_open']);
-            $talking = (int) round(min($micOpen, $u['talking']));
-            $dead = $t($sets['dead_mic']);
+
+            $hours = [];
+            foreach (['present', 'away'] as $metric) {
+                $this->bucket($sets[$metric], $utc, function (string $d, int $wd, int $h, int $sec) use (&$hours, $metric) {
+                    $key = sprintf('%s %02d', $d, $h);
+                    $hours[$key][$metric] = ($hours[$key][$metric] ?? 0) + $sec;
+                });
+            }
+
+            $byStore = [];
+            foreach ($u['by_store'] as $storeId => $s) {
+                $byStore[$storeId] = [
+                    'on_screen' => $t($this->merge($s['session'] ?? [])),
+                    'present' => $t($this->merge($s['visible'] ?? [])),
+                    'talking' => $s['talking'] ?? 0,
+                    'kicks' => $s['kicks'] ?? 0,
+                ];
+            }
+
+            $out[$uid] = [
+                'name' => $u['name'],
+                'stores' => array_keys($u['stores']),
+                'last_seen' => $u['last_seen'],
+                'kicks' => $u['kicks'],
+                'visits' => count($sets['on_screen']),
+                'm' => [
+                    'on_screen' => $t($sets['on_screen']),
+                    'present' => $t($sets['present']),
+                    'away' => $t($sets['away']),
+                    'no_face' => $t($sets['no_face']),
+                    'covered' => $t($sets['covered']),
+                    'camera_off' => $t($sets['camera_off']),
+                    'mic_open' => $micOpen,
+                    'talking' => min($micOpen, $u['talking']),
+                    'talk_raw' => $u['talking'],
+                    'dead_mic' => $t($sets['dead_mic']),
+                    'mic_off' => $t($sets['mic_off']),
+                    'talk_all' => $t($sets['talk_all']),
+                    'talk_all_talking' => $u['talk_all_talking'],
+                    'pip' => $t($sets['pip']),
+                ],
+                'main' => $perStation($u['main']),
+                'station_mic' => $perStation($u['station_mic']),
+                'station_cam' => $perStation($u['station_cam']),
+                'by_store' => $byStore,
+                'hours' => $hours,
+            ];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The report out of collect()'s numbers, any number of work days and managers: KPIs,
+     * managers, stores, screens, days, weekday × hour in $tz, camera, mic.
+     *
+     * @param  array<int, string>  $stores  store id => store number
+     * @param  list<array{0: string, 1: int, 2: array<string, mixed>}>  $partials  [work date, user id, numbers]
+     * @param  array<int>|null  $userIds  only these managers (null = all)
+     */
+    private function finalize(array $stores, array $partials, ?array $userIds, string $tz): array
+    {
+        $zone = new DateTimeZone($tz);
+        $utc = new DateTimeZone('UTC');
+
+        $stations = Station::whereIn('store_id', array_keys($stores))
+            ->where('type', Station::TYPE_STANDARD)
+            ->orderBy('store_id')->orderBy('name')
+            ->get(['id', 'store_id', 'name'])
+            ->keyBy('id');
+
+        // Everyone seen at these stores on these days, for the manager filter (which it ignores).
+        $seen = [];
+        foreach ($partials as [, $uid, $p]) {
+            $seen[$uid] = $p['name'] ?: ($seen[$uid] ?? null);
+        }
+        $managers = array_map(fn (int $uid, ?string $name) => ['user_id' => $uid, 'name' => $name ?: "#{$uid}"], array_keys($seen), $seen);
+        usort($managers, fn (array $a, array $b) => strcasecmp($a['name'], $b['name']));
+
+        $users = [];
+        $days = [];
+        $hours = ['present' => array_fill(0, 7, array_fill(0, 24, 0)), 'away' => array_fill(0, 7, array_fill(0, 24, 0))];
+        $storeRows = [];
+        $stationRows = [];
+
+        foreach ($partials as [$date, $uid, $p]) {
+            if ($userIds && !in_array($uid, $userIds, true)) {
+                continue;
+            }
+
+            $u = &$users[$uid];
+            $u ??= ['name' => null, 'stores' => [], 'last_seen' => 0, 'kicks' => 0, 'visits' => 0, 'm' => [], 'main' => []];
+            $u['name'] = $p['name'] ?: $u['name'];
+            foreach ($p['stores'] as $storeId) {
+                $u['stores'][$storeId] = true;
+            }
+            $u['last_seen'] = max($u['last_seen'], $p['last_seen']);
+            $u['kicks'] += $p['kicks'];
+            $u['visits'] += $p['visits'];
+            foreach ($p['m'] as $k => $v) {
+                $u['m'][$k] = ($u['m'][$k] ?? 0) + $v;
+            }
+            foreach ($p['main'] as $station => $sec) {
+                $u['main'][$station] = ($u['main'][$station] ?? 0) + $sec;
+            }
+            unset($u);
+
+            $d = &$days[$date];
+            $d['on_screen'] = ($d['on_screen'] ?? 0) + $p['m']['on_screen'];
+            $d['present'] = ($d['present'] ?? 0) + $p['m']['present'];
+            $d['talking'] = ($d['talking'] ?? 0) + $p['m']['talk_raw'];
+            if ($p['m']['on_screen'] > 0) {
+                $d['managers'][$uid] = true;
+            }
+            unset($d);
+
+            foreach ($p['hours'] as $key => $h) {
+                $local = (new DateTimeImmutable($key.':00:00', $utc))->setTimezone($zone);
+                $wd = (int) $local->format('N') - 1;
+                $hour = (int) $local->format('G');
+                $hours['present'][$wd][$hour] += $h['present'] ?? 0;
+                $hours['away'][$wd][$hour] += $h['away'] ?? 0;
+            }
+
+            foreach ($p['by_store'] as $storeId => $s) {
+                $r = &$storeRows[$storeId];
+                $r ??= ['store' => $stores[$storeId] ?? (string) $storeId, 'managers' => [], 'on_screen' => 0, 'present' => 0, 'talking' => 0, 'kicks' => 0];
+                $r['managers'][$uid] = true;
+                $r['on_screen'] += $s['on_screen'];
+                $r['present'] += $s['present'];
+                $r['talking'] += $s['talking'];
+                $r['kicks'] += $s['kicks'];
+                unset($r);
+            }
+
+            foreach (['main' => 'main', 'station_mic' => 'mic', 'station_cam' => 'camera'] as $src => $key) {
+                foreach ($p[$src] as $station => $sec) {
+                    $stationRows[$station][$key] = ($stationRows[$station][$key] ?? 0) + $sec;
+                    if ($key === 'main') {
+                        $stationRows[$station]['managers'][$uid] = true;
+                    }
+                }
+            }
+        }
+
+        $camera = ['present' => 0, 'no_face' => 0, 'covered' => 0, 'off' => 0];
+        $mic = ['talking' => 0, 'silent' => 0, 'dead' => 0, 'off' => 0];
+        $userRows = [];
+        foreach ($users as $uid => $u) {
+            $m = $u['m'];
+            $talking = (int) round($m['talking']);
 
             // Favorite screen: the longest in the main tile.
-            $mainTotals = [];
-            foreach ($u['main'] as $station => $ivs) {
-                $mainTotals[$station] = $t($this->merge($ivs));
-            }
+            $mainTotals = $u['main'];
             arsort($mainTotals);
             $favorite = array_key_first($mainTotals);
 
@@ -171,20 +422,20 @@ class ScreenUsageReport
                 'user_id' => $uid,
                 'name' => $u['name'] ?: "#{$uid}",
                 'stores' => array_values(array_map(fn ($id) => $stores[$id] ?? (string) $id, array_keys($u['stores']))),
-                'on_screen' => $t($onScreen),
-                'present' => $t($present),
-                'away' => $t($away),
-                'no_face' => $t($sets['no_face']),
-                'covered' => $t($sets['covered']),
-                'camera_off' => $t($sets['camera_off']),
-                'mic_open' => $micOpen,
+                'on_screen' => $m['on_screen'],
+                'present' => $m['present'],
+                'away' => $m['away'],
+                'no_face' => $m['no_face'],
+                'covered' => $m['covered'],
+                'camera_off' => $m['camera_off'],
+                'mic_open' => $m['mic_open'],
                 'talking' => $talking,
-                'silent' => max(0, $micOpen - $talking - $dead),
-                'dead_mic' => $dead,
-                'talk_all' => $t($sets['talk_all']),
-                'talk_all_talking' => (int) round($u['talk_all_talking']),
-                'pip' => $t($sets['pip']),
-                'visits' => count($onScreen),
+                'silent' => max(0, $m['mic_open'] - $talking - $m['dead_mic']),
+                'dead_mic' => $m['dead_mic'],
+                'talk_all' => $m['talk_all'],
+                'talk_all_talking' => (int) round($m['talk_all_talking']),
+                'pip' => $m['pip'],
+                'visits' => $u['visits'],
                 'kicks' => $u['kicks'],
                 'last_seen' => Carbon::createFromTimestamp($u['last_seen'])->toIso8601String(),
                 'favorite' => $favorite === null ? null : [
@@ -203,46 +454,7 @@ class ScreenUsageReport
             $mic['talking'] += $row['talking'];
             $mic['dead'] += $row['dead_mic'];
             $mic['silent'] += $row['silent'];
-            $mic['off'] += $t($sets['mic_off']);
-
-            // Per day / per weekday-hour, in the viewer's clock.
-            $this->bucket($onScreen, $zone, function (string $day, int $wd, int $h, int $sec) use (&$days, $uid) {
-                $days[$day]['on_screen'] = ($days[$day]['on_screen'] ?? 0) + $sec;
-                $days[$day]['managers'][$uid] = true;
-            });
-            $this->bucket($present, $zone, function (string $day, int $wd, int $h, int $sec) use (&$days, &$hours) {
-                $days[$day]['present'] = ($days[$day]['present'] ?? 0) + $sec;
-                $hours['present'][$wd][$h] += $sec;
-            });
-            $this->bucket($away, $zone, function (string $day, int $wd, int $h, int $sec) use (&$hours) {
-                $hours['away'][$wd][$h] += $sec;
-            });
-            foreach ($u['mic_spans'] as [$a, $b, $talk]) {
-                $len = $b - $a;
-                $this->bucket([[$a, $b]], $zone, function (string $day, int $wd, int $h, int $sec) use (&$days, $talk, $len) {
-                    $days[$day]['talking'] = ($days[$day]['talking'] ?? 0) + $talk * ($sec / $len);
-                });
-            }
-
-            foreach ($u['by_store'] as $storeId => $s) {
-                $r = &$storeRows[$storeId];
-                $r ??= ['store' => $stores[$storeId] ?? (string) $storeId, 'managers' => 0, 'on_screen' => 0, 'present' => 0, 'talking' => 0, 'kicks' => 0];
-                $r['managers']++;
-                $r['on_screen'] += $t($this->merge($s['session'] ?? []));
-                $r['present'] += $t($this->merge($s['visible'] ?? []));
-                $r['talking'] += (int) round($s['talking'] ?? 0);
-                $r['kicks'] += $s['kicks'] ?? 0;
-                unset($r);
-            }
-
-            foreach ([['main', 'main'], ['station_mic', 'mic'], ['station_cam', 'camera']] as [$src, $key]) {
-                foreach ($u[$src] as $station => $ivs) {
-                    $stationRows[$station][$key] = ($stationRows[$station][$key] ?? 0) + $t($this->merge($ivs));
-                    if ($key === 'main') {
-                        $stationRows[$station]['managers'][$uid] = true;
-                    }
-                }
-            }
+            $mic['off'] += $m['mic_off'];
         }
 
         usort($userRows, fn ($a, $b) => $b['on_screen'] <=> $a['on_screen']);
@@ -264,13 +476,11 @@ class ScreenUsageReport
         usort($screens, fn ($a, $b) => $b['main'] <=> $a['main']);
 
         $sum = fn (string $k) => array_sum(array_column($userRows, $k));
-        $onScreenTotal = $sum('on_screen');
 
         return [
-            'range' => ['from' => $from->toIso8601String(), 'to' => $to->toIso8601String(), 'tz' => $tz],
             'totals' => [
                 'managers' => count($userRows),
-                'on_screen' => $onScreenTotal,
+                'on_screen' => $sum('on_screen'),
                 'present' => $sum('present'),
                 'away' => $sum('away'),
                 'no_face' => $sum('no_face'),
@@ -286,7 +496,7 @@ class ScreenUsageReport
                 'screens_watched' => count(array_filter($screens, fn ($s) => $s['main'] > 0)),
             ],
             'users' => $userRows,
-            'stores' => array_values($storeRows),
+            'stores' => array_values(array_map(fn (array $r) => array_replace($r, ['managers' => count($r['managers']), 'talking' => (int) round($r['talking'])]), $storeRows)),
             'screens' => $screens,
             'days' => array_map(fn ($day, $d) => [
                 'date' => $day,
@@ -298,6 +508,7 @@ class ScreenUsageReport
             'hours' => $hours,
             'camera' => $camera,
             'mic' => $mic,
+            'managers' => $managers,
         ];
     }
 
@@ -526,8 +737,7 @@ class ScreenUsageReport
      */
     public function workDays(array $stores, string $start, string $end, bool $byStation = true): array
     {
-        $stored = DB::table('screen_usage_aggregated_days')->whereBetween('work_date', [$start, $end])
-            ->pluck('work_date')->map(fn ($d) => substr((string) $d, 0, 10))->flip()->all();
+        $stored = $this->storedDays($start, $end);
 
         $rows = [];
         if ($stored !== []) {
